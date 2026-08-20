@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+itsdangerous
+openai
+python-dotenv
+psycopg2-binary
+pymupdf
+python-multipart
+httpx        # only needed to run the test_*.py suites (fastapi TestClient)

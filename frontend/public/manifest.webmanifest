@@ -1,0 +1,12 @@
+{
+  "name": "Lexi — IELTS coach",
+  "short_name": "Lexi",
+  "description": "Personal IELTS training: imported tests, practice, vocabulary and spaced repetition.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#f7f7f9",
+  "theme_color": "#4f46e5",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
