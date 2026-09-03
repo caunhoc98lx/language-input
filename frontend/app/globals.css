@@ -135,6 +135,8 @@ label { font-weight: 600; font-size: 0.9rem; display: block; margin: 14px 0 6px;
 
 /* Flashcards */
 .study-wrap { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+.session-row { display: flex; align-items: center; justify-content: space-between; width: 100%; max-width: 520px; margin-bottom: -8px; }
+.combo-pill { background: #fff7ed; color: var(--warning); font-weight: 700; font-size: 0.85rem; padding: 4px 12px; border-radius: 999px; }
 .progress-bar { width: 100%; max-width: 520px; height: 6px; background: var(--border); border-radius: 4px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: var(--primary); transition: width 0.2s; }
 .flashcard {

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 
@@ -41,9 +40,6 @@ export default function LoginPage() {
             {busy ? "Logging in..." : "Log in"}
           </button>
         </form>
-        <p className="subtitle" style={{ marginTop: 16 }}>
-          No account? <Link href="/signup" style={{ color: "var(--primary)", fontWeight: 600 }}>Sign up</Link>
-        </p>
       </div>
     </div>
   );

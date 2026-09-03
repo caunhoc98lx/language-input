@@ -162,34 +162,9 @@ def build_learn_queue(conn, user_id: int, set_id: str, limit: int) -> list[dict]
 
 # ---------- auth ----------
 
-class SignupBody(BaseModel):
-    email: str
-    password: str
-    name: str = ""
-
-
 class LoginBody(BaseModel):
     email: str
     password: str
-
-
-@app.post("/api/auth/signup")
-def signup(request: Request, body: SignupBody):
-    email = body.email.strip().lower()
-    if len(body.password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters.")
-    with db() as conn:
-        existing = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-        if existing:
-            raise HTTPException(400, "An account with that email already exists.")
-        cur = conn.execute(
-            "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?) RETURNING id",
-            (email, auth.hash_password(body.password), body.name.strip()),
-        )
-        user_id = cur.fetchone()["id"]
-        user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    request.session["user_id"] = user_id
-    return row_to_user(user)
 
 
 @app.post("/api/auth/login")
