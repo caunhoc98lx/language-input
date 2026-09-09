@@ -27,7 +27,7 @@ function VocabularyNewContent() {
   const [items, setItems] = useState<ExtractedItem[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [sets, setSets] = useState<VocabSet[]>([]);
-  const [setId, setSetId] = useState("");
+  const [setId, setSetId] = useState("auto");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const router = useRouter();
@@ -69,7 +69,11 @@ function VocabularyNewContent() {
     setBusy(true);
     try {
       const toSave = items.filter((_, i) => selected.has(i));
-      await api.post("/api/vocabulary/save", { items: toSave, set_id: setId ? Number(setId) : null });
+      await api.post("/api/vocabulary/save", {
+        items: toSave,
+        set_id: setId !== "auto" && setId ? Number(setId) : null,
+        group_by_topic: setId === "auto",
+      });
       router.push("/vocabulary");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong.");
@@ -101,19 +105,24 @@ function VocabularyNewContent() {
                 <div className="meta">{item.definition}</div>
                 {item.examples[0] && <div className="meta">&quot;{item.examples[0]}&quot;</div>}
                 {item.ielts_level && <span className="badge">{item.ielts_level}</span>}
+                {setId === "auto" && item.topic && (
+                  <span className="badge" style={{ marginLeft: 6 }}>→ {item.topic}</span>
+                )}
               </div>
             </div>
           ))}
         </div>
 
-        {sets.length > 0 && (
-          <>
-            <label>Add to set (optional)</label>
-            <select value={setId} onChange={(e) => setSetId(e.target.value)}>
-              <option value="">No set</option>
-              {sets.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
-            </select>
-          </>
+        <label>Add to set</label>
+        <select value={setId} onChange={(e) => setSetId(e.target.value)}>
+          <option value="auto">Auto-group by topic (creates/reuses sets like &quot;Travel&quot;, &quot;Education&quot;)</option>
+          <option value="">No set</option>
+          {sets.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+        </select>
+        {setId === "auto" && (
+          <p className="subtitle" style={{ margin: "6px 0 0" }}>
+            Each word&apos;s topic (shown above) decides its set — a matching set is reused if you already have one.
+          </p>
         )}
 
         {error && <div className="error">{error}</div>}

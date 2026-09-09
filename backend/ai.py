@@ -2,6 +2,7 @@
 interface; add one if/when a second provider is actually wired in."""
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -44,6 +45,11 @@ or above, or IELTS-relevant) and return those as separate items. Skip trivial wo
 - For every item, provide an accurate Vietnamese translation and the rest of the \
 fields below. Keep definitions in English, translations in Vietnamese.
 - Do not invent words that are not present or implied in the input.
+- "word" must be the base dictionary form (lemma): singular noun, infinitive verb \
+without "to", positive-degree adjective/adverb - e.g. "boasted" -> "boast", "barrels" \
+-> "barrel", "beasts" -> "beast". Never save an inflected form as "word", even if that \
+is the exact form the input used. The inflected form can still appear naturally inside \
+"examples".
 
 Respond ONLY with JSON matching this shape:
 {
@@ -127,10 +133,39 @@ def _json_call(system: str, user: str, schema: type[BaseModel], what: str,
     raise AIError(f"{what} failed: {last_error}")
 
 
+WORD_LIST_BATCH_SIZE = 20
+
+
+def _looks_like_word_list(lines: list[str]) -> bool:
+    """A pasted list of words/phrases (one per line, <=6 words each) - as
+    opposed to a sentence or paragraph, where extraction is selective and the
+    output naturally stays small regardless of input length."""
+    return len(lines) >= 3 and all(len(ln.split()) <= 6 for ln in lines)
+
+
 def extract_vocabulary(text: str) -> list[VocabItem]:
     text = text.strip()
     if not text:
         return []
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if _looks_like_word_list(lines) and len(lines) > WORD_LIST_BATCH_SIZE:
+        # A full item (translation, definition, examples, synonyms, ...) costs
+        # a few hundred output tokens - past ~20 words in one call the model
+        # can run out of its output budget mid-item, which json.loads sees as
+        # an unterminated string. Batch the list so every call's output stays
+        # comfortably inside the limit, and run the batches concurrently since
+        # each is an independent request.
+        batches = [lines[i:i + WORD_LIST_BATCH_SIZE] for i in range(0, len(lines), WORD_LIST_BATCH_SIZE)]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = pool.map(
+                lambda batch: _json_call(SYSTEM_PROMPT, "\n".join(batch), VocabResponse,
+                                          "AI vocabulary extraction").items,
+                batches,
+            )
+            items: list[VocabItem] = []
+            for batch_items in results:
+                items.extend(batch_items)
+            return items
     return _json_call(SYSTEM_PROMPT, text, VocabResponse, "AI vocabulary extraction").items
 
 
@@ -238,7 +273,10 @@ top-level vocabulary list."]
 For "true_false_notgiven" and "short_answer", "options" must be an empty list.
 
 The top-level "vocabulary" list holds the full entry for every word referenced by any \
-question, plus a few more of the most useful words in the text. Each entry:
+question, plus a few more of the most useful words in the text. "word" must be the \
+base dictionary form (lemma) - singular noun, infinitive verb without "to", \
+positive-degree adjective/adverb - even where the text itself uses an inflected form, \
+e.g. "boasted" -> "boast". Each entry:
 {
   "word": "mitigate",
   "translation": "Vietnamese meaning",
@@ -412,148 +450,3 @@ def grade_writing(prompt: str, essay: str) -> WritingFeedback:
     return _json_call(GRADING_PROMPT, user, WritingFeedback, "Writing evaluation",
                       temperature=0.2, model=GRADING_MODEL)
 
-
-# ---------- speech to text ----------
-
-STT_PROVIDER = os.environ.get("STT_PROVIDER", "openai")
-STT_MODEL = os.environ.get("STT_MODEL", "whisper-1")
-
-
-def transcribe_audio(path: str, filename: str = "audio.mp3") -> str:
-    """Transcribe a listening recording.
-
-    ponytail: one provider, chosen by STT_PROVIDER, because one is wired up.
-    Adding Deepgram/Google means another branch here, not an interface layer.
-    """
-    if STT_PROVIDER != "openai":
-        raise AIError(f"Unknown STT_PROVIDER: {STT_PROVIDER}")
-    try:
-        with open(path, "rb") as fh:
-            resp = OpenAI().audio.transcriptions.create(model=STT_MODEL, file=(filename, fh))
-    except Exception as e:
-        raise AIError(f"Transcription failed: {e}")
-    text = getattr(resp, "text", "") or ""
-    if not text.strip():
-        raise AIError("Transcription returned nothing - is the recording silent?")
-    return text.strip()
-
-
-LOOKUP_SYSTEM = """You are an English dictionary for a Vietnamese IELTS learner.
-
-You are given one word or phrase and the sentence it appeared in. Explain that word \
-AS USED IN THAT CONTEXT - if it has several meanings, pick the one the sentence shows.
-
-Return exactly one item and fill in EVERY field. The Vietnamese translation and the \
-IPA pronunciation are the two the learner needs most, so they must never be empty. \
-Put the original sentence first in "examples".
-
-Respond ONLY with JSON:
-{"items": [{"word": "...", "translation": "Vietnamese meaning", \
-"part_of_speech": "...", "pronunciation": "/IPA/", "phonetic": "plain-english-sounds", \
-"definition": "short English definition", "examples": ["the original sentence", "..."], \
-"synonyms": ["..."], "antonyms": ["..."], "collocations": ["..."], \
-"ielts_level": "B2-C1", "topic": "...", "memory_tip": "..."}]}
-"""
-
-
-def lookup_word(word: str, context: str = "") -> VocabItem | None:
-    """One word, explained in the context it was met in. Used by click-to-look-up
-    in reading passages and transcripts."""
-    word = (word or "").strip()
-    if not word:
-        return None
-    user = f"Word: {word}"
-    if context.strip():
-        user += f"\nSentence: {context.strip()[:600]}"
-    items = _json_call(LOOKUP_SYSTEM, user, VocabResponse, "AI word lookup").items
-    return items[0] if items else None
-
-
-PASSAGE_VOCAB_SYSTEM = """You are an IELTS vocabulary coach for a Vietnamese learner.
-
-From the passage below, pick the words and phrases that are genuinely worth \
-learning for IELTS: B2 level and above, academic or topic vocabulary, and useful \
-collocations. Skip proper nouns and words a B1 learner already knows.
-
-Rules:
-- Only words that actually appear in the passage.
-- At most {limit} items, most useful first.
-- "examples" must start with the sentence from the passage that contains the word.
-
-Respond ONLY with JSON: {{"items": [ ... vocabulary items ... ]}}
-"""
-
-
-def extract_passage_vocabulary(text: str, limit: int = 12) -> list[VocabItem]:
-    """Useful IELTS vocabulary from a reading passage or transcript.
-
-    Nothing is saved anywhere by this call - the learner chooses what to keep.
-    """
-    text = (text or "").strip()
-    if not text:
-        return []
-    return _json_call(
-        PASSAGE_VOCAB_SYSTEM.format(limit=limit), text[:8000], VocabResponse,
-        "AI passage vocabulary extraction",
-    ).items[:limit]
-
-
-# ---------- speaking ----------
-
-class SpeakingFeedback(BaseModel):
-    band_overall: float
-    fluency_coherence: float
-    lexical_resource: float
-    grammatical_range: float
-    pronunciation: float
-    summary: str = ""
-    strengths: list[str] = Field(default_factory=list)
-    weaknesses: list[str] = Field(default_factory=list)
-    corrections: list[Correction] = Field(default_factory=list)
-    overused_words: list[str] = Field(default_factory=list)
-    fillers: list[str] = Field(default_factory=list)
-    suggested_vocabulary: list[VocabItem] = Field(default_factory=list)
-
-    _coerce_lists = field_validator("strengths", "weaknesses", "overused_words", "fillers",
-                                    mode="before")(_as_list)
-
-
-SPEAKING_PROMPT = """You are an experienced IELTS speaking examiner. You are given the \
-question the candidate was asked and a transcript of their spoken answer (produced by \
-speech-to-text, so punctuation may be imperfect - do not mark them down for that).
-
-Mark against the four official criteria, honestly, in 0.5 steps:
-1. Fluency and Coherence - can they keep going, develop ideas, link them?
-2. Lexical Resource - range and precision, including idiomatic and topic vocabulary.
-3. Grammatical Range and Accuracy - variety of structures and error density.
-4. Pronunciation - judge ONLY what the transcript can show (word choice, stress \
-patterns visible as mis-transcriptions, repetition, false starts). Say in the summary \
-that pronunciation cannot be fully judged from a transcript.
-
-Then:
-- List filler words and phrases they leaned on ("like", "you know", "um").
-- List words they overused, where a stronger IELTS synonym exists.
-- Pick 3-6 sentences they actually said that could be improved: original, improved, \
-why, error_type and grammar_topic (Tenses, Articles, Prepositions, Subject-Verb \
-Agreement, Conditionals, Relative Clauses, Passive Voice, Modal Verbs, Complex \
-Sentences, Conjunctions, Gerunds & Infinitives, Noun Clauses, Adverbial Clauses, \
-Comparatives, Quantifiers, Word Choice, Word Form).
-- Suggest 3-5 higher-band vocabulary items that would have fitted this answer, as full \
-vocabulary objects.
-
-If the answer is far too short or off-topic, say so plainly and mark accordingly.
-
-Write "summary", "strengths", "weaknesses" and every "why" in Vietnamese; keep all \
-English words and example sentences in English.
-
-Respond ONLY with JSON matching the described shape, with keys: band_overall, \
-fluency_coherence, lexical_resource, grammatical_range, pronunciation, summary, \
-strengths, weaknesses, corrections, overused_words, fillers, suggested_vocabulary."""
-
-
-def grade_speaking(prompt: str, transcript: str) -> SpeakingFeedback:
-    return _json_call(
-        SPEAKING_PROMPT,
-        f"Question:\n{prompt}\n\nCandidate's answer (transcribed):\n{transcript}",
-        SpeakingFeedback, "AI speaking evaluation", temperature=0.2, model=GRADING_MODEL,
-    )

@@ -17,7 +17,7 @@ interface ProgressData {
   };
   question_type_accuracy: QuestionTypeAccuracy[];
   weak_areas: QuestionTypeAccuracy[];
-  history: { skill: string; band: number; at: string; source: string }[];
+  history: { skill: string; band: number; at: string }[];
   vocabulary: {
     total: number;
     mastered: number;
@@ -29,8 +29,7 @@ interface ProgressData {
     reviews_in_window: number;
   };
   activity: { day: string; items: number }[];
-  submissions: { kind: string; count: number; avg_band: number; best_band: number }[];
-  tests_completed: number;
+  daily_tasks_completed: number;
   streak: number;
   days: number;
 }
@@ -129,8 +128,8 @@ function ProgressContent() {
           <div className="label">Estimated overall{bands.target ? ` · target ${bands.target}` : ""}</div>
         </div>
         <div className="card stat">
-          <div className="num">{data.tests_completed}</div>
-          <div className="label">Practice sessions</div>
+          <div className="num">{data.daily_tasks_completed}</div>
+          <div className="label">Daily tasks completed</div>
         </div>
         <div className="card stat">
           <div className="num">{activeDays}</div>
@@ -172,7 +171,7 @@ function ProgressContent() {
             ))
           )}
           {data.weak_areas.length > 0 && (
-            <Link href="/practice" className="btn small" style={{ marginTop: 12, display: "inline-flex" }}>
+            <Link href="/daily" className="btn small" style={{ marginTop: 12, display: "inline-flex" }}>
               Practise the weakest
             </Link>
           )}
@@ -206,21 +205,6 @@ function ProgressContent() {
           </p>
         </div>
       </div>
-
-      {data.submissions.length > 0 && (
-        <div className="card">
-          <h2>Writing &amp; speaking</h2>
-          {data.submissions.map((s) => (
-            <div key={s.kind} className="weak-row">
-              <span className="label">{s.kind === "WRITING" ? "Writing" : "Speaking"}</span>
-              <span className="pct">
-                {s.count} submission{s.count === 1 ? "" : "s"} · average band {Number(s.avg_band).toFixed(1)} ·
-                best {Number(s.best_band).toFixed(1)}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
     </>
   );
 }

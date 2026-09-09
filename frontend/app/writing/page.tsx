@@ -1,101 +1,54 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import Protected from "@/components/Protected";
+import DailyWritingTask from "@/components/DailyWritingTask";
 import { api } from "@/lib/api";
+import { bandColor } from "@/lib/daily";
 
-interface Prompt {
-  id: number;
+interface HistoryItem {
+  kind: string;
+  task_date: string;
   title: string;
-  instructions: string;
-  body: string;
-  section_number: number;
-  test_number: number;
-  material_id: number;
-  material_title: string;
-  attempts: number;
-}
-
-interface Submission {
-  id: number;
-  task_label: string;
-  prompt: string;
   band: number | null;
-  word_count: number;
-  created_at: string;
 }
 
 function WritingContent() {
-  const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [history, setHistory] = useState<HistoryItem[] | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    Promise.all([
-      api.get("/api/writing/prompts").catch(() => ({ prompts: [] })),
-      api.get("/api/submissions?kind=WRITING").catch(() => ({ submissions: [] })),
-    ]).then(([p, s]) => {
-      setPrompts(p.prompts);
-      setSubmissions(s.submissions);
-      setLoaded(true);
+    api.get("/api/daily").then((data) => {
+      setHistory(data.history.filter((h: HistoryItem) => h.kind === "writing"));
     });
-  }, []);
+  }, [refreshKey]);
 
-  if (!loaded) return null;
+  if (!history) return null;
 
   return (
     <>
       <h1>Writing</h1>
-      <p className="subtitle">
-        Answer a task from your imported material and get an examiner report on all four criteria.
-      </p>
+      <p className="subtitle">Every day, a fresh IELTS Writing Task 2 question - write your essay and an AI examiner marks it on all four criteria.</p>
 
-      <h2>Imported tasks</h2>
-      {prompts.length === 0 ? (
-        <div className="card empty-state">
-          <p>
-            No writing tasks yet. Import a book with Writing Task 1 or Task 2 pages and they appear here.
-          </p>
-          <Link href="/library/import" className="btn" style={{ marginTop: 10, display: "inline-flex" }}>
-            Import material
-          </Link>
-        </div>
-      ) : (
-        <div className="card" style={{ padding: 0, marginBottom: 24 }}>
-          {prompts.map((p) => (
-            <Link key={p.id} href={`/writing/${p.id}`} className="list-row" style={{ display: "flex" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600 }}>
-                  {p.material_title} · Test {p.test_number} · {p.title}
-                </div>
-                <div className="subtitle" style={{ margin: 0 }}>
-                  {(p.body || p.instructions).slice(0, 120)}…
-                </div>
-              </div>
-              {p.attempts > 0 && <span className="badge mastered">{p.attempts} attempt{p.attempts === 1 ? "" : "s"}</span>}
-            </Link>
-          ))}
-        </div>
-      )}
+      <DailyWritingTask onSubmitted={() => setRefreshKey((k) => k + 1)} />
 
       <h2>Your submissions</h2>
-      {submissions.length === 0 ? (
+      {history.length === 0 ? (
         <div className="card empty-state">
           <p>Nothing submitted yet.</p>
         </div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
-          {submissions.map((s) => (
-            <Link key={s.id} href={`/writing/submissions/${s.id}`} className="list-row" style={{ display: "flex" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600 }}>{s.task_label}</div>
-                <div className="subtitle" style={{ margin: 0 }}>
-                  {s.word_count} words · {s.created_at.slice(0, 16).replace("T", " ")}
-                </div>
+          {history.map((h, i) => (
+            <div className="list-row" key={i}>
+              <div style={{ fontWeight: 600 }}>{h.title || h.task_date}</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <span className="badge" style={{ background: "transparent", color: bandColor(h.band), border: `1px solid ${bandColor(h.band)}` }}>
+                  Band {h.band?.toFixed(1)}
+                </span>
+                <span className="subtitle" style={{ margin: 0, fontSize: "0.8rem" }}>{h.task_date}</span>
               </div>
-              {s.band !== null && <span className="badge">Band {s.band.toFixed(1)}</span>}
-            </Link>
+            </div>
           ))}
         </div>
       )}

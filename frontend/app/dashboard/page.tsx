@@ -49,6 +49,25 @@ function AccuracyRow({ row }: { row: QuestionTypeAccuracy }) {
   );
 }
 
+function formatMinutes(minutes: number): string {
+  if (minutes <= 0) return "0 min";
+  if (minutes < 1) return "<1 min";
+  return `${Math.round(minutes)} min`;
+}
+
+function TimeRow({ skill, minutes, max }: { skill: Skill; minutes: number; max: number }) {
+  const pct = max > 0 ? Math.round((minutes / max) * 100) : 0;
+  return (
+    <div className="time-row">
+      <span className="label">{skill}</span>
+      <span className="meter">
+        <span style={{ width: `${pct}%` }} />
+      </span>
+      <span className="value">{formatMinutes(minutes)}</span>
+    </div>
+  );
+}
+
 function DashboardContent({ user }: { user: User }) {
   const [data, setData] = useState<DashboardData | null>(null);
 
@@ -62,6 +81,9 @@ function DashboardContent({ user }: { user: User }) {
   const planMinutes = plan.reduce((sum, t) => sum + t.minutes, 0);
   const firstUndone = plan.find((t) => !t.done) ?? plan[0];
   const daysLeft = bands.target_date ? daysUntil(bands.target_date) : null;
+  const todayBySkill = activity.today_by_skill ?? [];
+  const todayTotalMinutes = todayBySkill.reduce((sum, r) => sum + r.minutes, 0);
+  const maxSkillMinutes = Math.max(0, ...todayBySkill.map((r) => r.minutes));
 
   return (
     <>
@@ -152,6 +174,25 @@ function DashboardContent({ user }: { user: User }) {
           <div className="num">{user.streak}</div>
           <div className="label">Day streak · {activity.reviews_this_week} reviews this week</div>
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 24 }}>
+        <h2>Today&apos;s practice time</h2>
+        {todayTotalMinutes > 0 ? (
+          <>
+            <p className="subtitle" style={{ margin: "0 0 16px" }}>
+              {formatMinutes(todayTotalMinutes)} today, across {todayBySkill.filter((r) => r.minutes > 0).length} skill
+              {todayBySkill.filter((r) => r.minutes > 0).length === 1 ? "" : "s"}
+            </p>
+            {todayBySkill.map((row) => (
+              <TimeRow key={row.skill} skill={row.skill} minutes={row.minutes} max={maxSkillMinutes} />
+            ))}
+          </>
+        ) : (
+          <p className="subtitle" style={{ margin: 0 }}>
+            No practice logged yet today. Finish a task from today&apos;s plan and it&apos;ll show up here.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-2">

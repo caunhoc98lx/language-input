@@ -50,6 +50,7 @@ export interface Coaching {
     practice_minutes_this_week: number;
     questions_answered: number;
     accuracy: number | null;
+    today_by_skill: { skill: Skill; minutes: number }[];
   };
 }
 
@@ -104,6 +105,7 @@ export interface VocabSet {
   description: string;
   created_at: string;
   word_count?: number;
+  mastered_count?: number;
 }
 
 export interface Review {

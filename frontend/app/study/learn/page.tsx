@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Protected from "@/components/Protected";
 import QuestionCard from "@/components/QuestionCard";
+import StudyModeTabs from "@/components/StudyModeTabs";
 import { api } from "@/lib/api";
 import type { LearnCard } from "@/lib/types";
 
@@ -20,13 +21,26 @@ function LearnContent() {
 
   if (!queue) return null;
 
+  function next(wasWrong: boolean) {
+    if (wasWrong) {
+      // Missed cards aren't done after one miss - they resurface a few
+      // cards later in the same session, same as Anki mode.
+      setQueue((prev) => {
+        if (!prev) return prev;
+        const q = [...prev];
+        q.splice(Math.min(q.length, i + 4), 0, q[i]);
+        return q;
+      });
+    }
+    setI((prev) => prev + 1);
+  }
+
   return (
     <>
       <div className="toolbar">
         <h1 style={{ margin: 0 }}>Study session</h1>
         <div className="spacer" />
-        <Link href="/study/flashcards" className="chip-select">Flashcards</Link>
-        <span className="chip-select active">Learn</span>
+        <StudyModeTabs active="learn" />
       </div>
 
       {queue.length === 0 ? (
@@ -44,7 +58,7 @@ function LearnContent() {
       ) : (
         <div className="study-wrap">
           <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${(100 * i) / queue.length}%` }} /></div>
-          <QuestionCard key={i} card={queue[i]} onNext={() => setI((prev) => prev + 1)} />
+          <QuestionCard key={i} card={queue[i]} onNext={next} />
         </div>
       )}
     </>

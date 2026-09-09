@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Protected from "@/components/Protected";
 import PracticeQuestions from "@/components/PracticeQuestions";
@@ -16,6 +16,7 @@ function ReadingContent() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const startedAtRef = useRef(Date.now());
 
   useEffect(() => {
     api
@@ -46,7 +47,8 @@ function ReadingContent() {
     setBusy(true);
     setError(null);
     try {
-      const data = await api.post("/api/daily/reading/submit", { answers });
+      const duration_sec = Math.round((Date.now() - startedAtRef.current) / 1000);
+      const data = await api.post("/api/daily/reading/submit", { answers, duration_sec });
       setAttempt(data.attempt);
       setTask((prev) => (prev ? { ...prev, content: data.content } : prev));
       window.scrollTo({ top: 0, behavior: "smooth" });

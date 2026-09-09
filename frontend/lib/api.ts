@@ -27,3 +27,10 @@ export const api = {
   patch: (path: string, body?: unknown) => request(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   delete: (path: string) => request(path, { method: "DELETE" }),
 };
+
+/** A fresh idempotency key for one write - e.g. one /api/review submission.
+ * Call it once per logical submission (not once per card), so a client-side
+ * retry of that exact request lands once server-side, not twice. */
+export function newRequestId(): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+}

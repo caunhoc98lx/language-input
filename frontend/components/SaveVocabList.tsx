@@ -47,7 +47,7 @@ export default function SaveVocabList({ items, emptyHint }: { items: VocabItem[]
       <div className="card" style={{ background: "#f0fdf4", borderColor: "#bbf7d0" }}>
         <strong style={{ color: "var(--success)" }}>✓ Added {selected.size} word{selected.size === 1 ? "" : "s"} to your vocabulary.</strong>
         <p className="subtitle" style={{ margin: "6px 0 0" }}>
-          They&apos;re scheduled for review now — <Link href="/study/flashcards" style={{ color: "var(--primary)", fontWeight: 600 }}>start studying</Link> or{" "}
+          They&apos;re scheduled for review now — <Link href="/study/anki" style={{ color: "var(--primary)", fontWeight: 600 }}>start studying</Link> or{" "}
           <Link href="/vocabulary" style={{ color: "var(--primary)", fontWeight: 600 }}>see your list</Link>.
         </p>
       </div>

@@ -26,6 +26,7 @@ function ListeningContent() {
   const [plays, setPlays] = useState(0);
   const [showTranscript, setShowTranscript] = useState(false);
   const utterRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const startedAtRef = useRef(Date.now());
 
   useEffect(() => {
     api
@@ -82,7 +83,8 @@ function ListeningContent() {
     setBusy(true);
     setError(null);
     try {
-      const data = await api.post("/api/daily/listening/submit", { answers });
+      const duration_sec = Math.round((Date.now() - startedAtRef.current) / 1000);
+      const data = await api.post("/api/daily/listening/submit", { answers, duration_sec });
       setAttempt(data.attempt);
       setTask((prev) => (prev ? { ...prev, content: data.content } : prev));
       setShowTranscript(true);

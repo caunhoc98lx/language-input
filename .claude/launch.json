@@ -4,7 +4,7 @@
     {
       "name": "language-input",
       "runtimeExecutable": "venv/Scripts/python",
-      "runtimeArgs": ["-m", "uvicorn", "main:app", "--port", "8000"],
+      "runtimeArgs": ["-m", "uvicorn", "main:app", "--port", "8000", "--app-dir", "backend"],
       "port": 8000
     },
     {

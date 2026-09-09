@@ -4,33 +4,23 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import type { User } from "@/lib/types";
+import DueBanner from "./DueBanner";
 
 /**
  * Desktop: grouped sidebar. Mobile: bottom navigation (5 destinations).
  *
- * ponytail: only routes that exist are listed. Practice / IELTS Tests /
- * Grammar / Speaking / Progress arrive with their phases - a nav item that
- * leads to an empty page is worse than no nav item.
+ * ponytail: only routes that exist are listed - a nav item that leads to an
+ * empty page is worse than no nav item.
  */
 const NAV: { group: string; items: { href: string; label: string }[] }[] = [
   {
     group: "Study",
     items: [
       { href: "/dashboard", label: "Dashboard" },
-      { href: "/practice", label: "Practice" },
       { href: "/daily", label: "Daily Practice" },
-      { href: "/study/flashcards", label: "Review" },
-      { href: "/listening/dictation", label: "Dictation" },
+      { href: "/study/anki", label: "Review" },
       { href: "/writing", label: "Writing" },
-      { href: "/speaking", label: "Speaking" },
-    ],
-  },
-  {
-    group: "Library",
-    items: [
-      { href: "/library", label: "IELTS Library" },
       { href: "/vocabulary", label: "Vocabulary" },
-      { href: "/sets", label: "Sets" },
     ],
   },
   {
@@ -45,9 +35,9 @@ const NAV: { group: string; items: { href: string; label: string }[] }[] = [
 
 const MOBILE_NAV = [
   { href: "/dashboard", label: "Home", icon: "◈" },
-  { href: "/practice", label: "Practice", icon: "◐" },
-  { href: "/study/flashcards", label: "Review", icon: "↻" },
-  { href: "/library", label: "Library", icon: "☰" },
+  { href: "/daily", label: "Daily", icon: "◐" },
+  { href: "/study/anki", label: "Review", icon: "↻" },
+  { href: "/vocabulary", label: "Vocabulary", icon: "☰" },
   { href: "/settings", label: "More", icon: "⋯" },
 ];
 
@@ -87,7 +77,10 @@ export default function AppShell({ user, children }: { user: User; children: Rea
         <a href="#" onClick={(e) => { e.preventDefault(); logout(); }}>Log out</a>
       </nav>
 
-      <main className="content">{children}</main>
+      <main className="content">
+        <DueBanner />
+        {children}
+      </main>
 
       <nav className="bottom-nav">
         {MOBILE_NAV.map((item) => (

@@ -1,84 +1,127 @@
 "use client";
 
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { api, newRequestId } from "@/lib/api";
+import { speak } from "@/lib/speech";
 import type { LearnCard } from "@/lib/types";
+import Confetti, { makeConfettiPieces, type ConfettiPiece } from "@/components/Confetti";
 
-export default function QuestionCard({ card, onNext }: { card: LearnCard; onNext: () => void }) {
-  const [answered, setAnswered] = useState(false);
+/**
+ * A missed card is not "done" on the first miss - the learner has to produce
+ * (retype, or pick) the right answer before moving on. `onNext(wasWrong)`
+ * tells the caller whether to bring the card back later in this session.
+ */
+export default function QuestionCard({ card, onNext }: { card: LearnCard; onNext: (wasWrong: boolean) => void }) {
+  const [settled, setSettled] = useState(false);
+  const [wrongOnce, setWrongOnce] = useState(false);
   const [feedback, setFeedback] = useState<{ correct: boolean; text: string } | null>(null);
   const [picked, setPicked] = useState<string | boolean | null>(null);
   const [inputValue, setInputValue] = useState("");
+  const [confettiPieces, setConfettiPieces] = useState<ConfettiPiece[] | null>(null);
 
-  async function submit(correct: boolean, correctAnswerText: string) {
-    if (answered) return;
-    setAnswered(true);
-    setFeedback({ correct, text: correct ? "Correct!" : `Not quite. Answer: ${correctAnswerText}` });
-    await api.post("/api/review", { vocabulary_id: card.id, rating: correct ? "good" : "again" });
-    setTimeout(onNext, correct ? 1100 : 1300);
+  async function grade(rating: "good" | "again") {
+    await api.post("/api/review", { vocabulary_id: card.id, rating, request_id: newRequestId() });
   }
 
+  async function settle(correctText: string) {
+    setSettled(true);
+    setFeedback({ correct: true, text: wrongOnce ? `Nice — it's "${correctText}"` : "Correct!" });
+    if (!wrongOnce) setConfettiPieces(makeConfettiPieces());
+    if (!wrongOnce) await grade("good");
+    setTimeout(() => onNext(wrongOnce), wrongOnce ? 900 : 1100);
+  }
+
+  async function miss(retryHint: string) {
+    if (!wrongOnce) {
+      setWrongOnce(true);
+      setFeedback({ correct: false, text: retryHint });
+      await grade("again");
+    } else {
+      setFeedback({ correct: false, text: retryHint });
+    }
+  }
+
+  const confetti = <Confetti pieces={confettiPieces} />;
+  const cardClass = `flashcard${feedback && !feedback.correct ? " shake" : ""}`;
+
   if (card.question_type === "multiple_choice") {
+    async function pick(opt: string) {
+      if (settled) return;
+      setPicked(opt);
+      if (opt === card.translation) await settle(card.translation);
+      else await miss("Not quite — try again");
+    }
     return (
-      <div className="flashcard" style={{ cursor: "default", alignItems: "stretch", textAlign: "left" }}>
+      <div className={cardClass} style={{ cursor: "default", alignItems: "stretch", textAlign: "left" }}>
+        {confetti}
         <div className="pos">What does this word mean?</div>
-        <div className="word" style={{ marginBottom: 16 }}>{card.word}</div>
+        <div className="word-row" style={{ marginBottom: 16, justifyContent: "flex-start" }}>
+          <div className="word">{card.word}</div>
+          <button type="button" className="speak-btn" aria-label="Listen" onClick={() => speak(card.word)}>🔊</button>
+        </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {card.options!.map((opt) => {
             const isPicked = picked === opt;
-            const bg = answered && isPicked ? (opt === card.translation ? "#dcfce7" : "#fee2e2") : undefined;
+            const bg = isPicked ? (opt === card.translation ? "#dcfce7" : "#fee2e2") : undefined;
             return (
-              <button
-                key={opt}
-                className="btn secondary"
-                style={{ background: bg }}
-                onClick={() => { setPicked(opt); submit(opt === card.translation, card.translation); }}
-              >
+              <button key={opt} className="btn secondary" style={{ background: bg }} onClick={() => pick(opt)}>
                 {opt}
               </button>
             );
           })}
         </div>
-        {feedback && <div style={{ fontWeight: 600, marginTop: 10, color: feedback.correct ? "var(--success)" : "var(--danger)" }}>{feedback.text}</div>}
+        {feedback && <div className={`feedback ${feedback.correct ? "correct" : "wrong"}`} style={{ fontWeight: 600, marginTop: 10, color: feedback.correct ? "var(--success)" : "var(--danger)" }}>{feedback.text}</div>}
       </div>
     );
   }
 
   if (card.question_type === "true_false") {
+    async function pick(val: boolean) {
+      if (settled) return;
+      setPicked(val);
+      if (val === card.tf_answer) await settle(card.tf_answer ? "True" : "False");
+      else await miss("Not quite — try again");
+    }
     return (
-      <div className="flashcard" style={{ cursor: "default", alignItems: "stretch", textAlign: "left" }}>
+      <div className={cardClass} style={{ cursor: "default", alignItems: "stretch", textAlign: "left" }}>
+        {confetti}
         <div className="pos">True or False?</div>
-        <div className="word" style={{ fontSize: "1.4rem", marginBottom: 6 }}>{card.word}</div>
+        <div className="word-row" style={{ marginBottom: 6, justifyContent: "flex-start" }}>
+          <div className="word" style={{ fontSize: "1.4rem" }}>{card.word}</div>
+          <button type="button" className="speak-btn" aria-label="Listen" onClick={() => speak(card.word)}>🔊</button>
+        </div>
         <div className="examples" style={{ marginTop: 0 }}>&quot;{card.tf_statement}&quot;</div>
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
           {[true, false].map((val) => {
             const isPicked = picked === val;
-            const bg = answered && isPicked ? (val === card.tf_answer ? "#dcfce7" : "#fee2e2") : undefined;
+            const bg = isPicked ? (val === card.tf_answer ? "#dcfce7" : "#fee2e2") : undefined;
             return (
-              <button
-                key={String(val)}
-                className="btn secondary"
-                style={{ flex: 1, background: bg }}
-                onClick={() => { setPicked(val); submit(val === card.tf_answer, card.tf_answer ? "True" : "False"); }}
-              >
+              <button key={String(val)} className="btn secondary" style={{ flex: 1, background: bg }} onClick={() => pick(val)}>
                 {val ? "True" : "False"}
               </button>
             );
           })}
         </div>
-        {feedback && <div style={{ fontWeight: 600, marginTop: 10, color: feedback.correct ? "var(--success)" : "var(--danger)" }}>{feedback.text}</div>}
+        {feedback && <div className={`feedback ${feedback.correct ? "correct" : "wrong"}`} style={{ fontWeight: 600, marginTop: 10, color: feedback.correct ? "var(--success)" : "var(--danger)" }}>{feedback.text}</div>}
       </div>
     );
   }
 
   // type_answer or fill_blank
-  const check = () => {
+  async function check() {
+    if (settled || !inputValue.trim()) return;
     const correct = inputValue.trim().toLowerCase() === card.word.trim().toLowerCase();
-    submit(correct, card.word);
-  };
+    if (correct) {
+      await settle(card.word);
+    } else {
+      setInputValue("");
+      await miss(`Not quite — type "${card.word}" to continue`);
+    }
+  }
 
   return (
-    <div className="flashcard" style={{ cursor: "default", alignItems: "stretch", textAlign: "left" }}>
+    <div className={cardClass} style={{ cursor: "default", alignItems: "stretch", textAlign: "left" }}>
+      {confetti}
       {card.question_type === "fill_blank" ? (
         <>
           <div className="pos">Fill in the blank</div>
@@ -96,11 +139,18 @@ export default function QuestionCard({ card, onNext }: { card: LearnCard; onNext
         autoFocus
         onChange={(e) => setInputValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") check(); }}
-        style={{ borderColor: answered ? (feedback?.correct ? "var(--success)" : "var(--danger)") : undefined }}
-        disabled={answered}
+        style={{ borderColor: feedback ? (feedback.correct ? "var(--success)" : "var(--danger)") : undefined }}
+        disabled={settled}
       />
-      <button className="btn" style={{ marginTop: 12 }} onClick={check} disabled={answered}>Check</button>
-      {feedback && <div style={{ fontWeight: 600, marginTop: 10, color: feedback.correct ? "var(--success)" : "var(--danger)" }}>{feedback.text}</div>}
+      <button className="btn" style={{ marginTop: 12 }} onClick={check} disabled={settled || !inputValue.trim()}>Check</button>
+      {feedback && (
+        <div className="word-row" style={{ marginTop: 10, justifyContent: "flex-start" }}>
+          <div className={`feedback ${feedback.correct ? "correct" : "wrong"}`} style={{ fontWeight: 600, color: feedback.correct ? "var(--success)" : "var(--danger)" }}>
+            {feedback.text}
+          </div>
+          {settled && <button type="button" className="speak-btn" aria-label="Listen" onClick={() => speak(card.word)}>🔊</button>}
+        </div>
+      )}
     </div>
   );
 }

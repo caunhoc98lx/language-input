@@ -162,17 +162,17 @@ def todays_plan(*, due_cards: int, new_cards: int, weak: list[dict],
         # ~4 cards a minute at review speed, capped at a third of the session.
         mins = max(5, min(round(due_cards / 4), round(budget / 3)))
         add("vocabulary", f"Review {due_cards} vocabulary cards",
-            "Due for spaced repetition today", mins, "/study/flashcards")
+            "Due for spaced repetition today", mins, "/study/anki")
 
     if weak:
         top = weak[0]
         add("weakness", f"Practice {top['label']}",
             f"{round(top['accuracy'] * 100)}% accuracy over {top['attempts']} questions",
-            min(20, max(10, round(budget / 2))), "/practice")
+            min(20, max(10, round(budget / 2))), "/daily")
 
     if mistakes:
         add("mistakes", f"Redo {min(mistakes, 10)} questions you got wrong",
-            "Questions you have never answered correctly", min(10, budget), "/practice")
+            "Questions you have never answered correctly", min(10, budget), "/daily")
 
     if grammar_topic:
         add("grammar", f"Fix your {grammar_topic} mistakes",
