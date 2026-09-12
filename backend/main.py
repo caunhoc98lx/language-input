@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
-import psycopg2.errors
+import pymysql.err
 
 import auth
 import ai
@@ -39,6 +39,14 @@ REVIEW_QUEUE_SIZE = 20
 
 
 # ---------- helpers ----------
+
+def now_iso() -> str:
+    """The one timestamp format this app writes anywhere - every INSERT that
+    used to lean on the database's own CURRENT_TIMESTAMP default now passes
+    this explicitly instead, so the string format is identical regardless
+    of which engine (or which of Postgres/MySQL) wrote it."""
+    return datetime.now(timezone.utc).isoformat()
+
 
 def current_user(request: Request):
     uid = request.session.get("user_id")
@@ -89,7 +97,7 @@ def _daily_budget(conn, user) -> tuple[int, int]:
     spec: configurable daily caps, timezone-correct day boundary."""
     start, end = srs.day_bounds_utc(user["timezone"] or "UTC")
     counts = conn.execute(
-        """SELECT COUNT(*) FILTER (WHERE state_before='NEW') new_done, COUNT(*) total_done
+        """SELECT SUM(CASE WHEN state_before='NEW' THEN 1 ELSE 0 END) new_done, COUNT(*) total_done
            FROM reviews WHERE user_id=? AND reviewed_at>=? AND reviewed_at<?""",
         (user["id"], start, end),
     ).fetchone()
@@ -493,7 +501,8 @@ def _set_id_for_topic(conn, user_id: int, topic: str, cache: dict[str, int]) -> 
         set_id = row["id"]
     else:
         set_id = conn.execute(
-            "INSERT INTO vocabulary_sets (user_id, title) VALUES (?,?) RETURNING id", (user_id, topic)
+            "INSERT INTO vocabulary_sets (user_id, title, description, created_at) VALUES (?,?,?,?) RETURNING id",
+            (user_id, topic, "", now_iso()),
         ).fetchone()["id"]
     cache[key] = set_id
     return set_id
@@ -513,18 +522,21 @@ def vocabulary_save(request: Request, body: SaveBody):
             if existing:
                 vid = existing["id"]
             else:
+                created = now_iso()
                 vid = conn.execute(
                     """INSERT INTO vocabulary
                        (user_id, word, normalized_word, translation, definition, part_of_speech,
                         pronunciation, phonetic, examples_json, synonyms_json, antonyms_json,
-                        collocations_json, ielts_level, topic, memory_tip)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                        collocations_json, ielts_level, topic, memory_tip, notes, srs_state,
+                        next_review_at, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                     (
                         user["id"], item["word"], normalized, item.get("translation", ""), item.get("definition", ""),
                         item.get("part_of_speech", ""), item.get("pronunciation", ""), item.get("phonetic", ""),
                         json.dumps(item.get("examples", [])), json.dumps(item.get("synonyms", [])),
                         json.dumps(item.get("antonyms", [])), json.dumps(item.get("collocations", [])),
-                        item.get("ielts_level", ""), item.get("topic", ""), item.get("memory_tip", ""),
+                        item.get("ielts_level", ""), item.get("topic", ""), item.get("memory_tip", ""), "", "NEW",
+                        created, created, created,
                     ),
                 ).fetchone()["id"]
             saved_ids.append(vid)
@@ -533,7 +545,7 @@ def vocabulary_save(request: Request, body: SaveBody):
         if body.set_id:
             for vid in saved_ids:
                 conn.execute(
-                    "INSERT INTO set_words (set_id, vocabulary_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    "INSERT IGNORE INTO set_words (set_id, vocabulary_id) VALUES (?, ?)",
                     (body.set_id, vid),
                 )
         elif body.group_by_topic:
@@ -544,7 +556,7 @@ def vocabulary_save(request: Request, body: SaveBody):
                     continue
                 set_id = _set_id_for_topic(conn, user["id"], topic, set_cache)
                 conn.execute(
-                    "INSERT INTO set_words (set_id, vocabulary_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    "INSERT IGNORE INTO set_words (set_id, vocabulary_id) VALUES (?, ?)",
                     (set_id, vid),
                 )
     return {"ok": True, "saved_ids": saved_ids}
@@ -575,9 +587,9 @@ def vocabulary_edit(request: Request, vocab_id: int, body: EditVocabBody):
     user = require_user(request)
     with db() as conn:
         conn.execute(
-            """UPDATE vocabulary SET translation=?, definition=?, notes=?, memory_tip=?, updated_at=CURRENT_TIMESTAMP
+            """UPDATE vocabulary SET translation=?, definition=?, notes=?, memory_tip=?, updated_at=?
                WHERE id=? AND user_id=?""",
-            (body.translation, body.definition, body.notes, body.memory_tip, vocab_id, user["id"]),
+            (body.translation, body.definition, body.notes, body.memory_tip, now_iso(), vocab_id, user["id"]),
         )
         row = conn.execute("SELECT * FROM vocabulary WHERE id=? AND user_id=?", (vocab_id, user["id"])).fetchone()
         if not row:
@@ -646,8 +658,8 @@ def sets_new(request: Request, body: NewSetBody):
     user = require_user(request)
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO vocabulary_sets (user_id, title, description) VALUES (?, ?, ?) RETURNING id",
-            (user["id"], body.title.strip(), body.description.strip()),
+            "INSERT INTO vocabulary_sets (user_id, title, description, created_at) VALUES (?, ?, ?, ?) RETURNING id",
+            (user["id"], body.title.strip(), body.description.strip(), now_iso()),
         )
         set_id = cur.fetchone()["id"]
         row = conn.execute("SELECT * FROM vocabulary_sets WHERE id=?", (set_id,)).fetchone()
@@ -692,7 +704,7 @@ def set_add_words(request: Request, set_id: int, body: AddWordsBody):
             raise HTTPException(404)
         for wid in body.word_ids:
             conn.execute(
-                "INSERT INTO set_words (set_id, vocabulary_id) VALUES (?, ?) ON CONFLICT DO NOTHING", (set_id, wid)
+                "INSERT IGNORE INTO set_words (set_id, vocabulary_id) VALUES (?, ?)", (set_id, wid)
             )
     return {"ok": True}
 
@@ -729,21 +741,22 @@ def study_due(request: Request):
     with db() as conn:
         row = conn.execute(
             """SELECT
-                 COUNT(*) FILTER (WHERE srs_state NOT IN ('NEW') AND next_review_at<=?
-                                   AND fsrs_state IN (1,3)) learning,
-                 COUNT(*) FILTER (WHERE srs_state NOT IN ('NEW') AND next_review_at<=?
-                                   AND fsrs_state=2) review,
-                 COUNT(*) FILTER (WHERE srs_state='NEW') new
+                 SUM(CASE WHEN srs_state NOT IN ('NEW') AND next_review_at<=?
+                          AND fsrs_state IN (1,3) THEN 1 ELSE 0 END) learning,
+                 SUM(CASE WHEN srs_state NOT IN ('NEW') AND next_review_at<=?
+                          AND fsrs_state=2 THEN 1 ELSE 0 END) review,
+                 SUM(CASE WHEN srs_state='NEW' THEN 1 ELSE 0 END) new
                FROM vocabulary WHERE user_id=?""",
             (now, now, user["id"]),
         ).fetchone()
+        learning, review, new = row["learning"] or 0, row["review"] or 0, row["new"] or 0
         new_left, reviews_left = _daily_budget(conn, user)
     return {
-        "due": row["learning"] + row["review"],
-        "learning": row["learning"],
-        "review": row["review"],
-        "new_available": row["new"],
-        "new_today": min(row["new"], new_left),
+        "due": learning + review,
+        "learning": learning,
+        "review": review,
+        "new_available": new,
+        "new_today": min(new, new_left),
         "reviews_remaining_today": reviews_left,
     }
 
@@ -766,30 +779,31 @@ def study_learn(request: Request, set_id: str = ""):
 
 def _apply_review(conn, user, vocabulary_id: int, rating: str, request_id: str | None):
     """Core of POST /api/review: run the FSRS scheduler, persist the new card
-    state and a full review-log row in one transaction. Raises psycopg2's
-    UniqueViolation if `request_id` was already used (caller decides how to
+    state and a full review-log row in one transaction. Raises PyMySQL's
+    IntegrityError if `request_id` was already used (caller decides how to
     respond - see api_review)."""
     row = conn.execute("SELECT * FROM vocabulary WHERE id=? AND user_id=?", (vocabulary_id, user["id"])).fetchone()
     if not row:
         raise HTTPException(404)
     result = srs.review(row, rating)
     f, log = result["fields"], result["log"]
+    touched_at = now_iso()
     conn.execute(
         """UPDATE vocabulary SET fsrs_state=?, fsrs_step=?, stability=?, difficulty=?,
            repetitions=?, lapses=?, srs_state=?, interval_days=?,
-           next_review_at=?, last_reviewed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+           next_review_at=?, last_reviewed_at=?, updated_at=?
            WHERE id=?""",
         (f["fsrs_state"], f["fsrs_step"], f["stability"], f["difficulty"],
          f["repetitions"], f["lapses"], f["srs_state"], f["interval_days"],
-         f["next_review_at"], vocabulary_id),
+         f["next_review_at"], touched_at, touched_at, vocabulary_id),
     )
     conn.execute(
         """INSERT INTO reviews
-           (vocabulary_id, user_id, rating, interval_before, interval_after, request_id,
+           (vocabulary_id, user_id, rating, interval_before, interval_after, request_id, reviewed_at,
             state_before, state_after, stability_before, stability_after,
             difficulty_before, difficulty_after, scheduled_days, elapsed_days)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (vocabulary_id, user["id"], rating, row["interval_days"], f["interval_days"], request_id,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (vocabulary_id, user["id"], rating, row["interval_days"], f["interval_days"], request_id, touched_at,
          log["state_before"], log["state_after"], log["stability_before"], log["stability_after"],
          log["difficulty_before"], log["difficulty_after"], log["scheduled_days"], log["elapsed_days"]),
     )
@@ -813,7 +827,7 @@ def api_review(request: Request, body: ReviewBody):
     try:
         with db() as conn:
             f = _apply_review(conn, user, body.vocabulary_id, body.rating, body.request_id)
-    except psycopg2.errors.UniqueViolation:
+    except pymysql.err.IntegrityError:
         with db() as conn:
             existing = conn.execute(
                 "SELECT * FROM reviews WHERE request_id=? AND user_id=?", (body.request_id, user["id"])
@@ -862,9 +876,9 @@ def review_stats(request: Request, days: int = 30):
         ).fetchone()["c"]
         totals = conn.execute(
             """SELECT COUNT(*) total,
-                      COUNT(*) FILTER (WHERE srs_state='NEW') new,
-                      COUNT(*) FILTER (WHERE srs_state NOT IN ('NEW')) learned,
-                      COUNT(*) FILTER (WHERE srs_state != 'NEW' AND next_review_at<=?) due_now
+                      SUM(CASE WHEN srs_state='NEW' THEN 1 ELSE 0 END) new,
+                      SUM(CASE WHEN srs_state NOT IN ('NEW') THEN 1 ELSE 0 END) learned,
+                      SUM(CASE WHEN srs_state != 'NEW' AND next_review_at<=? THEN 1 ELSE 0 END) due_now
                FROM vocabulary WHERE user_id=?""",
             (datetime.now(timezone.utc).isoformat(), user["id"]),
         ).fetchone()
@@ -881,9 +895,9 @@ def review_stats(request: Request, days: int = 30):
             for r in srs.RATINGS
         },
         "total_cards": totals["total"],
-        "new_cards": totals["new"],
-        "cards_learned": totals["learned"],
-        "due_now": totals["due_now"],
+        "new_cards": totals["new"] or 0,
+        "cards_learned": totals["learned"] or 0,
+        "due_now": totals["due_now"] or 0,
         "streak": user["streak"],
     }
 
@@ -1083,15 +1097,21 @@ def daily_generate(request: Request, kind: str):
     except ai.AIError as e:
         raise HTTPException(502, str(e))
     with db() as conn:
-        cur = conn.execute(
-            """INSERT INTO daily_tasks (user_id, task_date, kind, content_json)
-               VALUES (?,?,?,?)
-               ON CONFLICT (user_id, task_date, kind) DO UPDATE SET kind = EXCLUDED.kind
-               RETURNING id""",
-            (user["id"], today, kind, json.dumps(generated)),
+        # INSERT IGNORE + re-select instead of an upsert: two concurrent
+        # requests generating the same day's task is the only case this
+        # guards against, and whichever one actually landed in the table is
+        # the one every caller should see - not whichever one finished its
+        # AI call last.
+        conn.execute(
+            "INSERT IGNORE INTO daily_tasks (user_id, task_date, kind, content_json, created_at) VALUES (?,?,?,?,?)",
+            (user["id"], today, kind, json.dumps(generated), now_iso()),
         )
-        task_id = cur.fetchone()["id"]
-    return {"task": {"id": task_id, "kind": kind, "date": today, "content": strip_answers(generated)},
+        row = conn.execute(
+            "SELECT id, content_json FROM daily_tasks WHERE user_id=? AND task_date=? AND kind=?",
+            (user["id"], today, kind),
+        ).fetchone()
+    stored = json.loads(row["content_json"])
+    return {"task": {"id": row["id"], "kind": kind, "date": today, "content": strip_answers(stored)},
             "attempt": None}
 
 
@@ -1129,10 +1149,11 @@ def daily_submit(request: Request, kind: str, body: DailyAnswersBody):
 
     with db() as conn:
         cur = conn.execute(
-            """INSERT INTO daily_attempts (task_id, user_id, answers_json, score, total, band, feedback_json, duration_sec)
-               VALUES (?,?,?,?,?,?,?,?) RETURNING id""",
+            """INSERT INTO daily_attempts
+               (task_id, user_id, answers_json, score, total, band, feedback_json, duration_sec, submitted_at)
+               VALUES (?,?,?,?,?,?,?,?,?) RETURNING id""",
             (task["id"], user["id"], json.dumps(answers), score, total, band, json.dumps(feedback),
-             body.duration_sec),
+             body.duration_sec, now_iso()),
         )
         attempt_id = cur.fetchone()["id"]
     touch_streak(user["id"])
@@ -1167,16 +1188,16 @@ def progress(request: Request, days: int = 90):
 
         vocab = conn.execute(
             """SELECT COUNT(*) total,
-                      COUNT(*) FILTER (WHERE srs_state='MASTERED') mastered,
-                      COUNT(*) FILTER (WHERE srs_state IN ('LEARNING','REVIEW','RELEARNING')) learning,
-                      COUNT(*) FILTER (WHERE srs_state='NEW') new_words,
-                      COUNT(*) FILTER (WHERE lapses > 0) lapsed,
-                      COALESCE(AVG(interval_days) FILTER (WHERE repetitions > 0), 0) avg_interval
+                      SUM(CASE WHEN srs_state='MASTERED' THEN 1 ELSE 0 END) mastered,
+                      SUM(CASE WHEN srs_state IN ('LEARNING','REVIEW','RELEARNING') THEN 1 ELSE 0 END) learning,
+                      SUM(CASE WHEN srs_state='NEW' THEN 1 ELSE 0 END) new_words,
+                      SUM(CASE WHEN lapses > 0 THEN 1 ELSE 0 END) lapsed,
+                      COALESCE(AVG(CASE WHEN repetitions > 0 THEN interval_days END), 0) avg_interval
                FROM vocabulary WHERE user_id=?""",
             (user["id"],),
         ).fetchone()
         reviews = conn.execute(
-            """SELECT COUNT(*) total, COUNT(*) FILTER (WHERE rating='again') lapses
+            """SELECT COUNT(*) total, SUM(CASE WHEN rating='again' THEN 1 ELSE 0 END) lapses
                FROM reviews WHERE user_id=? AND reviewed_at>=?""",
             (user["id"], since),
         ).fetchone()
@@ -1208,8 +1229,12 @@ def progress(request: Request, days: int = 90):
         "weak_areas": coaching["weak_areas"],
         "history": [{"skill": (h["skill"] or "").lower(), "band": h["band"], "score": h["score"],
                      "total": h["total"], "at": h["at"]} for h in history],
-        "vocabulary": {**dict(vocab), "avg_interval": round(vocab["avg_interval"] or 0, 1),
-                       "retention": retention, "reviews_in_window": reviews["total"]},
+        "vocabulary": {
+            "total": vocab["total"], "mastered": vocab["mastered"] or 0, "learning": vocab["learning"] or 0,
+            "new_words": vocab["new_words"] or 0, "lapsed": vocab["lapsed"] or 0,
+            "avg_interval": round(vocab["avg_interval"] or 0, 1),
+            "retention": retention, "reviews_in_window": reviews["total"],
+        },
         "activity": [{"day": a["day"], "items": a["items"]} for a in activity],
         "daily_tasks_completed": daily_tasks_done,
         "streak": user["streak"],

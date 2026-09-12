@@ -3,6 +3,6 @@ uvicorn[standard]
 itsdangerous
 openai
 python-dotenv
-psycopg2-binary
+pymysql
 fsrs
 tzdata      # IANA timezone data for zoneinfo - not bundled by Python on Windows

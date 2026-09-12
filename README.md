@@ -7,7 +7,7 @@ writing practice — all graded by AI.
 
 ## Stack
 
-- **Backend**: FastAPI (Python), PostgreSQL (`psycopg2`), OpenAI for extraction/
+- **Backend**: FastAPI (Python), MySQL (`PyMySQL`), OpenAI for extraction/
   tutoring/grading, session-cookie auth.
 - **Frontend**: Next.js (App Router) + React, plain CSS (no UI framework).
 
@@ -15,9 +15,9 @@ writing practice — all graded by AI.
 
 - **Vocabulary capture** — paste text, AI extracts words/phrases with translation,
   definition, pronunciation, examples, synonyms/antonyms, collocations, IELTS level.
-- **Spaced repetition (SM-2)** — flashcards and a "learn" mode (multiple choice,
+- **Spaced repetition (FSRS)** — flashcards and a "learn" mode (multiple choice,
   true/false, fill-in-the-blank, type-the-answer) that adapt question difficulty to
-  how well you know each word.
+  how well you know each word, scheduled by the same FSRS algorithm family Anki uses.
 - **Vocabulary sets** — group words into custom study sets.
 - **AI tutor** — chat about grammar/vocabulary/usage; it knows the words you're
   struggling with.
@@ -35,10 +35,10 @@ writing practice — all graded by AI.
 ```
 backend/
   main.py       FastAPI app: routes for auth, vocabulary, sets, study, tutor, daily practice
-  db.py         Postgres connection + schema
+  db.py         MySQL connection + schema
   coach.py      Band estimates, weak-area detection, today's study plan
   auth.py       Password hashing/verification
-  srs.py        SM-2 spaced-repetition scheduler
+  srs.py        FSRS spaced-repetition scheduler (wraps the `fsrs` library)
   ielts.py      IELTS band-conversion tables, used to score daily reading/listening
   ai.py         OpenAI prompts/schemas: extraction, tutor, daily practice, essay grading
   requirements.txt
@@ -61,11 +61,12 @@ Copy `backend/.env.example` to `backend/.env` and fill in:
 OPENAI_API_KEY=sk-...
 SESSION_SECRET=some-random-string
 FRONTEND_ORIGIN=http://localhost:3000
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/language_input
+DATABASE_URL=mysql://root:@localhost:3306/language_input
 ```
 
-Make sure the Postgres database in `DATABASE_URL` exists (`createdb language_input`),
-then start the API — tables are created automatically on startup:
+Make sure the MySQL database in `DATABASE_URL` exists
+(`mysql -u root -e "CREATE DATABASE language_input"`), then start the API —
+tables are created automatically on startup:
 
 ```bash
 uvicorn main:app --reload --app-dir backend
