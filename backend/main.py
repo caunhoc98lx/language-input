@@ -212,6 +212,13 @@ def build_learn_queue(conn, user, set_id: str, limit: int) -> list[dict]:
     return cards
 
 
+# ---------- health ----------
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
 # ---------- auth ----------
 
 class LoginBody(BaseModel):
