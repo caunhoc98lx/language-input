@@ -5,4 +5,5 @@ openai
 python-dotenv
 pymysql
 fsrs
+a2wsgi      # ASGI->WSGI adapter, needed only for the cPanel/Passenger WSGI entry point
 tzdata      # IANA timezone data for zoneinfo - not bundled by Python on Windows

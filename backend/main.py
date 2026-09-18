@@ -35,6 +35,16 @@ app.add_middleware(
 
 init_db()
 
+# cPanel/Passenger on this host calls application(environ, start_response) -
+# plain WSGI, no ASGI auto-detection - and its Python Selector panel
+# regenerates passenger_wsgi.py from the "Application entry point" field on
+# every restart, overwriting any hand-edited version of that file. So the
+# WSGI-wrapped app is exported here instead, where the panel can't touch it;
+# set the panel's entry point to "wsgi_app".
+from a2wsgi import ASGIMiddleware
+
+wsgi_app = ASGIMiddleware(app)
+
 REVIEW_QUEUE_SIZE = 20
 
 
