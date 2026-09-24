@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Countdown from "@/components/Countdown";
 import SaveVocabList from "@/components/SaveVocabList";
 import { api, ApiError } from "@/lib/api";
 import { bandColor } from "@/lib/daily";
 import type { DailyAttempt, DailyTask, WritingFeedback } from "@/lib/daily";
+
+// Task 2's official time allowance - the clock runs regardless of question count.
+const TASK2_SECONDS = 40 * 60;
 
 const CRITERIA: [keyof WritingFeedback, string][] = [
   ["task_response", "Task Response"],
@@ -53,6 +57,7 @@ export default function DailyWritingTask({ onSubmitted }: { onSubmitted?: () => 
   }
 
   async function submit() {
+    if (busy || attempt) return;
     setBusy(true);
     setError(null);
     try {
@@ -170,6 +175,11 @@ export default function DailyWritingTask({ onSubmitted }: { onSubmitted?: () => 
         </>
       ) : (
         <>
+          <div className="practice-bar">
+            <span className="subtitle" style={{ margin: 0 }}>40 minutes, as in the real exam</span>
+            <div className="spacer" />
+            <Countdown seconds={TASK2_SECONDS} onExpire={submit} />
+          </div>
           <textarea
             rows={16}
             placeholder="Write your essay here..."

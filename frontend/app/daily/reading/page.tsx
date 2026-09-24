@@ -2,12 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import Countdown from "@/components/Countdown";
 import Protected from "@/components/Protected";
 import PracticeQuestions from "@/components/PracticeQuestions";
 import SaveVocabList from "@/components/SaveVocabList";
 import { api, ApiError } from "@/lib/api";
 import { bandColor, splitVocabByMistakes } from "@/lib/daily";
 import type { DailyAttempt, DailyTask } from "@/lib/daily";
+
+// Scaled down from the real 60-minute/3-passage paper for a single 8-question passage.
+const READING_SECONDS = 20 * 60;
 
 function ReadingContent() {
   const [task, setTask] = useState<DailyTask | null>(null);
@@ -44,6 +48,7 @@ function ReadingContent() {
   }
 
   async function submit() {
+    if (busy || attempt) return;
     setBusy(true);
     setError(null);
     try {
@@ -99,6 +104,14 @@ function ReadingContent() {
           </div>
           <div className="spacer" style={{ flex: 1 }} />
           <Link href="/daily" className="btn secondary">Back to today</Link>
+        </div>
+      )}
+
+      {!attempt && (
+        <div className="practice-bar">
+          <span className="subtitle" style={{ margin: 0 }}>Time limit for this passage</span>
+          <div className="spacer" />
+          <Countdown seconds={READING_SECONDS} onExpire={submit} />
         </div>
       )}
 

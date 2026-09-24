@@ -2,12 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import Countdown from "@/components/Countdown";
 import Protected from "@/components/Protected";
 import PracticeQuestions from "@/components/PracticeQuestions";
 import SaveVocabList from "@/components/SaveVocabList";
 import { api, ApiError } from "@/lib/api";
 import { bandColor, splitVocabByMistakes } from "@/lib/daily";
 import type { DailyAttempt, DailyTask } from "@/lib/daily";
+
+// Scaled down from the real ~30-minute section for a single 6-question recording.
+const LISTENING_SECONDS = 12 * 60;
 
 // ponytail: browser speech synthesis, not generated audio files. Free, offline,
 // and instant; swap in OpenAI TTS here if the robotic voice starts costing marks.
@@ -79,6 +83,7 @@ function ListeningContent() {
   }
 
   async function submit() {
+    if (busy || attempt) return;
     stop();
     setBusy(true);
     setError(null);
@@ -136,6 +141,14 @@ function ListeningContent() {
           </div>
           <div style={{ flex: 1 }} />
           <Link href="/daily" className="btn secondary">Back to today</Link>
+        </div>
+      )}
+
+      {!attempt && (
+        <div className="practice-bar">
+          <span className="subtitle" style={{ margin: 0 }}>Time limit for this section</span>
+          <div className="spacer" />
+          <Countdown seconds={LISTENING_SECONDS} onExpire={submit} />
         </div>
       )}
 

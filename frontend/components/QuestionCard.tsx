@@ -32,6 +32,7 @@ export default function QuestionCard({ card, onNext }: { card: LearnCard; onNext
   }
 
   async function miss(retryHint: string) {
+    speak(card.word);
     if (!wrongOnce) {
       setWrongOnce(true);
       setFeedback({ correct: false, text: retryHint });

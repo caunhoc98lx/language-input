@@ -106,6 +106,7 @@ function AnkiContent() {
     } else {
       setInputValue("");
       setCombo(0);
+      speak(card.word);
       if (!wrongOnce) {
         setWrongOnce(true);
         setFeedback({ correct: false, text: `Not quite — type "${card.word}" to continue` });

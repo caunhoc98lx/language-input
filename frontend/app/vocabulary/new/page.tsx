@@ -104,6 +104,9 @@ function VocabularyNewContent() {
                 </div>
                 <div className="meta">{item.definition}</div>
                 {item.examples[0] && <div className="meta">&quot;{item.examples[0]}&quot;</div>}
+                {item.synonyms.length > 0 && (
+                  <div className="meta"><strong>Synonyms:</strong> {item.synonyms.join(", ")}</div>
+                )}
                 {item.ielts_level && <span className="badge">{item.ielts_level}</span>}
                 {setId === "auto" && item.topic && (
                   <span className="badge" style={{ marginLeft: 6 }}>→ {item.topic}</span>
