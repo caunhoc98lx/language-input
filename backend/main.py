@@ -74,9 +74,21 @@ def require_user(request: Request):
     return user
 
 
+def level_info(xp: int) -> dict:
+    """Level from total XP: going from level L to L+1 costs 100 + 50*(L-1) XP,
+    so early levels come fast and later ones stretch out."""
+    level, need, left = 1, 100, max(0, xp or 0)
+    while left >= need:
+        left -= need
+        level += 1
+        need = 100 + 50 * (level - 1)
+    return {"level": level, "xp_into_level": left, "xp_for_next": need}
+
+
 def row_to_user(row) -> dict:
     d = dict(row)
     d.pop("password_hash", None)
+    d.update(level_info(d.get("xp") or 0))
     return d
 
 
@@ -96,8 +108,9 @@ def touch_streak(user_id: int):
 
 def row_to_vocab(row) -> dict:
     d = dict(row)
-    for field in ("examples", "synonyms", "antonyms", "collocations"):
-        d[field] = json.loads(d.pop(f"{field}_json") or "[]")
+    for field in ("examples", "synonyms", "antonyms", "collocations", "word_family"):
+        d[field] = json.loads(d.pop(f"{field}_json", None) or "[]")
+    d["memory_strength"] = srs.memory_strength(row)
     return d
 
 
@@ -544,15 +557,15 @@ def vocabulary_save(request: Request, body: SaveBody):
                     """INSERT INTO vocabulary
                        (user_id, word, normalized_word, translation, definition, part_of_speech,
                         pronunciation, phonetic, examples_json, synonyms_json, antonyms_json,
-                        collocations_json, ielts_level, topic, memory_tip, notes, srs_state,
-                        next_review_at, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                        collocations_json, word_family_json, ielts_level, topic, memory_tip, notes,
+                        srs_state, next_review_at, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                     (
                         user["id"], item["word"], normalized, item.get("translation", ""), item.get("definition", ""),
                         item.get("part_of_speech", ""), item.get("pronunciation", ""), item.get("phonetic", ""),
                         json.dumps(item.get("examples", [])), json.dumps(item.get("synonyms", [])),
                         json.dumps(item.get("antonyms", [])), json.dumps(item.get("collocations", [])),
-                        item.get("ielts_level", ""), item.get("topic", ""), item.get("memory_tip", ""), "", "NEW",
+                        json.dumps(item.get("word_family", [])), item.get("ielts_level", ""), item.get("topic", ""), item.get("memory_tip", ""), "", "NEW",
                         created, created, created,
                     ),
                 ).fetchone()["id"]
@@ -783,7 +796,19 @@ def study_flashcards(request: Request, set_id: str = ""):
     user = require_user(request)
     with db() as conn:
         rows = fetch_study_rows(conn, user, set_id, REVIEW_QUEUE_SIZE)
-    return {"queue": [row_to_vocab(r) for r in rows]}
+        # More of the learner's own words, used only as wrong options in the
+        # game's choice/listening/match rounds - never scheduled.
+        pool = conn.execute(
+            """SELECT id, word, translation, definition, part_of_speech, examples_json
+               FROM vocabulary WHERE user_id=? ORDER BY RAND() LIMIT 60""",
+            (user["id"],),
+        ).fetchall()
+    return {
+        "queue": [row_to_vocab(r) for r in rows],
+        "pool": [{"id": p["id"], "word": p["word"], "translation": p["translation"] or "",
+                  "definition": p["definition"] or "", "part_of_speech": p["part_of_speech"] or "",
+                  "examples": json.loads(p["examples_json"] or "[]")} for p in pool],
+    }
 
 
 @app.get("/api/study/learn")
@@ -856,7 +881,10 @@ def api_review(request: Request, body: ReviewBody):
             "interval_days": existing["scheduled_days"], "duplicate": True,
         }
     touch_streak(user["id"])
-    return {"ok": True, "state": f["srs_state"], "next_review_at": f["next_review_at"], "interval_days": f["interval_days"]}
+    with db() as conn:
+        row = conn.execute("SELECT * FROM vocabulary WHERE id=?", (body.vocabulary_id,)).fetchone()
+    return {"ok": True, "state": f["srs_state"], "next_review_at": f["next_review_at"],
+            "interval_days": f["interval_days"], "memory_strength": srs.memory_strength(row)}
 
 
 @app.get("/api/review/preview/{vocabulary_id}")
@@ -917,6 +945,102 @@ def review_stats(request: Request, days: int = 30):
         "due_now": totals["due_now"] or 0,
         "streak": user["streak"],
     }
+
+
+# ---------- game layer ----------
+# XP, coins, combo and achievements sit on top of the scheduler: the game
+# screen still rates every word through POST /api/review, and nothing here
+# touches a card's schedule.
+
+# (key, title, description, icon, unlocked-when)
+ACHIEVEMENTS = [
+    ("first_session", "First Steps", "Finish your first study session", "🎯", lambda s: s["sessions_completed"] >= 1),
+    ("sessions_25", "Regular", "Finish 25 study sessions", "📚", lambda s: s["sessions_completed"] >= 25),
+    ("boss_1", "Boss Slayer", "Defeat a Final Boss", "⚔️", lambda s: s["boss_wins"] >= 1),
+    ("boss_10", "Boss Hunter", "Defeat 10 Final Bosses", "🏆", lambda s: s["boss_wins"] >= 10),
+    ("combo_10", "On Fire", "Reach a x10 combo", "🔥", lambda s: s["best_combo"] >= 10),
+    ("combo_25", "Unstoppable", "Reach a x25 combo", "⚡", lambda s: s["best_combo"] >= 25),
+    ("streak_3", "Warming Up", "Study 3 days in a row", "📅", lambda s: s["streak"] >= 3),
+    ("streak_7", "One Week Strong", "Study 7 days in a row", "🗓️", lambda s: s["streak"] >= 7),
+    ("streak_30", "Habit Formed", "Study 30 days in a row", "💎", lambda s: s["streak"] >= 30),
+    ("words_25", "Word Collector", "Start learning 25 words", "🧩", lambda s: s["words_learned"] >= 25),
+    ("words_100", "Lexicon Builder", "Start learning 100 words", "🏛️", lambda s: s["words_learned"] >= 100),
+    ("mastered_10", "Long-Term Memory", "Master 10 words", "🧠", lambda s: s["words_mastered"] >= 10),
+    ("level_5", "Rising Star", "Reach level 5", "⭐", lambda s: s["level"] >= 5),
+    ("level_10", "Band Booster", "Reach level 10", "🚀", lambda s: s["level"] >= 10),
+]
+
+
+def _game_stats(conn, user_id: int) -> dict:
+    u = conn.execute(
+        "SELECT xp, coins, streak, best_combo, boss_wins, sessions_completed FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    v = conn.execute(
+        """SELECT SUM(CASE WHEN srs_state != 'NEW' THEN 1 ELSE 0 END) learned,
+                  SUM(CASE WHEN srs_state = 'MASTERED' THEN 1 ELSE 0 END) mastered
+           FROM vocabulary WHERE user_id=?""",
+        (user_id,),
+    ).fetchone()
+    stats = {k: u[k] or 0 for k in ("xp", "coins", "streak", "best_combo", "boss_wins", "sessions_completed")}
+    stats.update(level_info(stats["xp"]), words_learned=int(v["learned"] or 0), words_mastered=int(v["mastered"] or 0))
+    return stats
+
+
+def _unlocked(stats: dict) -> set[str]:
+    return {a[0] for a in ACHIEVEMENTS if a[4](stats)}
+
+
+def _achievement_dicts(keys=None, unlocked=None) -> list[dict]:
+    return [{"key": k, "title": t, "description": d, "icon": i, "unlocked": unlocked is None or k in unlocked}
+            for k, t, d, i, _ in ACHIEVEMENTS if keys is None or k in keys]
+
+
+class GameSessionBody(BaseModel):
+    request_id: str
+    xp: int
+    coins: int
+    best_combo: int
+    correct: int
+    total: int
+    boss_won: bool
+
+
+@app.post("/api/game/session")
+def game_session(request: Request, body: GameSessionBody):
+    """Credit one finished game session. Idempotent on request_id, like
+    /api/review. The client computes XP/coins; the server only clamps them to
+    what one session can plausibly earn. ponytail: clamp instead of replaying
+    every answer server-side - add replay if XP ever gates anything real."""
+    user = require_user(request)
+    xp = min(max(body.xp, 0), 2000)
+    coins = min(max(body.coins, 0), 400)
+    combo = min(max(body.best_combo, 0), 200)
+    with db() as conn:
+        before = _unlocked(_game_stats(conn, user["id"]))
+        try:
+            conn.execute(
+                """INSERT INTO game_sessions
+                   (user_id, request_id, xp, coins, best_combo, correct, total, boss_won, completed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (user["id"], body.request_id[:64], xp, coins, combo, body.correct, body.total, body.boss_won, now_iso()),
+            )
+        except pymysql.err.IntegrityError:
+            return {"stats": _game_stats(conn, user["id"]), "new_achievements": [], "duplicate": True}
+        conn.execute(
+            """UPDATE users SET xp=xp+?, coins=coins+?, best_combo=GREATEST(best_combo, ?),
+               boss_wins=boss_wins+?, sessions_completed=sessions_completed+1 WHERE id=?""",
+            (xp, coins, combo, 1 if body.boss_won else 0, user["id"]),
+        )
+        stats = _game_stats(conn, user["id"])
+    return {"stats": stats, "new_achievements": _achievement_dicts(keys=_unlocked(stats) - before)}
+
+
+@app.get("/api/game/achievements")
+def game_achievements(request: Request):
+    user = require_user(request)
+    with db() as conn:
+        stats = _game_stats(conn, user["id"])
+    return {"stats": stats, "achievements": _achievement_dicts(unlocked=_unlocked(stats))}
 
 
 # ---------- AI tutor ----------

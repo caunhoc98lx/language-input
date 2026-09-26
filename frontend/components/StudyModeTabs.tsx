@@ -3,8 +3,9 @@
 import Link from "next/link";
 
 const MODES = [
-  { href: "/study/anki", key: "anki", label: "Anki" },
-  { href: "/study/learn", key: "learn", label: "Learn" },
+  { href: "/study/anki", key: "game", label: "Game" },
+  { href: "/study/learn", key: "learn", label: "Quiz" },
+  { href: "/study/classic", key: "classic", label: "Classic" },
 ] as const;
 
 export default function StudyModeTabs({ active }: { active: (typeof MODES)[number]["key"] }) {

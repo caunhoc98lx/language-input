@@ -1,279 +1,290 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Protected from "@/components/Protected";
 import Confetti, { makeConfettiPieces, type ConfettiPiece } from "@/components/Confetti";
 import StudyModeTabs from "@/components/StudyModeTabs";
+import Cheer3DLayout, { type CheerMood } from "@/components/Cheer3DLayout";
+import {
+  ArenaRound, ChoiceRound, LearnRound, MatchRound, MemoryMeter, SentenceRound, TypeRound,
+  type AwardFn,
+} from "@/components/GameRounds";
 import { api, newRequestId } from "@/lib/api";
-import { speak } from "@/lib/speech";
-import type { Vocab } from "@/lib/types";
+import { buildSession, coinsFor, pickWords, retryFor, xpWithCombo, type Round } from "@/lib/game";
+import type { Achievement, GameStats, PoolWord, Vocab } from "@/lib/types";
 
-const RATINGS = [
-  { key: "again", label: "Again", cls: "rating-again", hint: "1" },
-  { key: "hard", label: "Hard", cls: "rating-hard", hint: "2" },
-  { key: "good", label: "Good", cls: "rating-good", hint: "3" },
-  { key: "easy", label: "Easy", cls: "rating-easy", hint: "4" },
-] as const;
+/**
+ * Gamified study session. The FSRS queue from /api/study/flashcards still
+ * decides which words are due; this screen only changes how they're
+ * practised. Each word's first graded answer in the session is sent to
+ * /api/review as its rating (correct -> good, correct with a typo -> hard,
+ * miss -> again); later rounds on the same word are practice and never
+ * touch the schedule.
+ */
 
-type RatingKey = (typeof RATINGS)[number]["key"];
-type Preview = Record<RatingKey, { interval_days: number; next_review_at: string; state: string }>;
+type Tally = { xp: number; combo: number; best: number; correct: number; total: number };
+const ZERO: Tally = { xp: 0, combo: 0, best: 0, correct: 0, total: 0 };
 
-/** Formats a day count from the scheduler into "<10m / 1h / 4d / 3mo / 1.2y" -
- * pure display formatting of a number the backend already computed; no
- * scheduling logic lives here. */
-function formatInterval(days: number): string {
-  const minutes = days * 24 * 60;
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${Math.round(minutes)}m`;
-  const hours = minutes / 60;
-  if (hours < 24) return `${Math.round(hours)}h`;
-  if (days < 30) return `${Math.round(days)}d`;
-  if (days < 365) return `${Math.round(days / 30)}mo`;
-  return `${(days / 365).toFixed(1)}y`;
+type Session = { rounds: Round[]; words: Vocab[]; pool: PoolWord[]; more: boolean; requestId: string };
+
+const isQuestion = (r: Round) => r.kind === "choice" || r.kind === "type" || r.kind === "sentence";
+
+function RoundView({ round, award, onDone }: { round: Round; award: AwardFn; onDone: (correct: boolean) => void }) {
+  switch (round.kind) {
+    case "learn": return <LearnRound round={round} award={award} onDone={onDone} />;
+    case "choice": return <ChoiceRound round={round} award={award} onDone={onDone} />;
+    case "type": return <TypeRound round={round} award={award} onDone={onDone} />;
+    case "sentence": return <SentenceRound round={round} award={award} onDone={onDone} />;
+    case "match": return <MatchRound round={round} award={award} onDone={onDone} />;
+    case "battle":
+    case "boss": return <ArenaRound round={round} award={award} onDone={onDone} />;
+  }
 }
 
-function AnkiContent() {
+function GameContent() {
   const setId = useSearchParams().get("set_id") || "";
-  const [queue, setQueue] = useState<Vocab[] | null>(null);
-  const [i, setI] = useState(0);
-  const [combo, setCombo] = useState(0);
-  const [inputValue, setInputValue] = useState("");
-  const [wrongOnce, setWrongOnce] = useState(false);
-  const [settled, setSettled] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<{ correct: boolean; text: string } | null>(null);
-  const [confettiPieces, setConfettiPieces] = useState<ConfettiPiece[] | null>(null);
-  const [preview, setPreview] = useState<Preview | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [empty, setEmpty] = useState(false);
+  const [loadKey, setLoadKey] = useState(0);
+  const [idx, setIdx] = useState(0);
+  const [tally, setTally] = useState<Tally>(ZERO);
+  const tallyRef = useRef<Tally>(ZERO); // award() must return the new combo synchronously
+  const rated = useRef(new Set<number>());
+  const [memory, setMemory] = useState<Record<number, number>>({});
+  const [gain, setGain] = useState<{ xp: number; key: number } | null>(null);
+  const [confetti, setConfetti] = useState<ConfettiPiece[] | null>(null);
+  const [bossWon, setBossWon] = useState(false);
+  const [chest, setChest] = useState(0);
+  const [mood, setMood] = useState<CheerMood>("idle");
+  const moodTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Cheerleaders react to an answer, then settle back to idle. */
+  const react = useCallback((m: CheerMood) => {
+    if (moodTimer.current) clearTimeout(moodTimer.current);
+    setMood(m);
+    moodTimer.current = m === "idle" ? null : setTimeout(() => setMood("idle"), 1800);
+  }, []);
+  useEffect(() => () => { if (moodTimer.current) clearTimeout(moodTimer.current); }, []);
 
   useEffect(() => {
-    const params = setId ? `?set_id=${setId}` : "";
-    api.get(`/api/study/flashcards${params}`).then((data) => setQueue(data.queue));
-  }, [setId]);
-
-  const card = queue ? queue[i] : undefined;
-
-  const advance = useCallback((requeue: boolean) => {
-    setWrongOnce(false);
-    setSettled(false);
-    setFeedback(null);
-    setInputValue("");
-    setConfettiPieces(null);
-    setPreview(null);
-    if (requeue && card) {
-      // Not done with this word yet - it resurfaces a few cards later in
-      // the same session instead of disappearing after one miss.
-      setQueue((prev) => {
-        if (!prev) return prev;
-        const next = [...prev];
-        next.splice(Math.min(next.length, i + 4), 0, card);
-        return next;
-      });
-    }
-    setI((prev) => prev + 1);
-  }, [card, i]);
-
-  const rate = useCallback(async (rating: RatingKey) => {
-    if (!card || busy) return; // client-side guard: ignore a second click while the first is in flight
-    setBusy(true);
-    try {
-      if (rating === "good" || rating === "easy") setConfettiPieces(makeConfettiPieces());
-      // request_id: a fresh id per rating click, sent to the idempotent
-      // /api/review endpoint - if this exact HTTP request is ever retried
-      // (flaky network, not a second click, which the busy guard already
-      // blocks) the backend applies it once, not twice.
-      await api.post("/api/review", { vocabulary_id: card.id, rating, request_id: newRequestId() });
-      advance(rating === "again");
-    } finally {
-      setBusy(false);
-    }
-  }, [card, busy, advance]);
-
-  async function check() {
-    if (settled || busy || !card || !inputValue.trim()) return;
-    const correct = inputValue.trim().toLowerCase() === card.word.trim().toLowerCase();
-    if (correct) {
-      setSettled(true);
-      setFeedback({
-        correct: true,
-        text: wrongOnce ? `Nice — it's "${card.word}". How well did you know it?` : "🎉 Correct! How well did you know it?",
-      });
-      setCombo((c) => (wrongOnce ? c : c + 1));
-      // Wait for the learner to self-rate below, Anki-style - typing it
-      // correctly only proves the spelling, not how easily it came. This
-      // applies whether it was right first try or only after a retype.
-    } else {
-      setInputValue("");
-      setCombo(0);
-      speak(card.word);
-      if (!wrongOnce) {
-        setWrongOnce(true);
-        setFeedback({ correct: false, text: `Not quite — type "${card.word}" to continue` });
-        setBusy(true);
-        try {
-          await api.post("/api/review", { vocabulary_id: card.id, rating: "again", request_id: newRequestId() });
-        } finally {
-          setBusy(false);
-        }
-      } else {
-        setFeedback({ correct: false, text: `Type "${card.word}" to continue` });
-      }
-    }
-  }
-
-  const awaitingRating = settled;
-
-  // Fetch what each rating would do, to show on the buttons before the
-  // learner picks one (section 7 of the spec) - never computed on the
-  // frontend, always the same scheduler the real submit uses.
-  useEffect(() => {
-    if (!awaitingRating || !card) return;
     let cancelled = false;
-    api.get(`/api/review/preview/${card.id}`).then((data) => {
-      if (!cancelled) setPreview(data);
+    const params = setId ? `?set_id=${setId}` : "";
+    api.get(`/api/study/flashcards${params}`).then((data: { queue: Vocab[]; pool: PoolWord[] }) => {
+      if (cancelled) return;
+      const words = pickWords(data.queue);
+      tallyRef.current = ZERO;
+      rated.current = new Set();
+      setTally(ZERO);
+      setIdx(0);
+      setBossWon(false);
+      setConfetti(null);
+      setMemory(Object.fromEntries(words.map((w) => [w.id, w.memory_strength])));
+      setEmpty(words.length === 0);
+      setSession({
+        rounds: buildSession(words, data.pool), words, pool: data.pool,
+        more: data.queue.length > words.length, requestId: newRequestId(),
+      });
     });
     return () => { cancelled = true; };
-  }, [awaitingRating, card]);
+  }, [setId, loadKey]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!awaitingRating) return;
-      const byHint = RATINGS.find((r) => r.hint === e.key);
-      if (byHint) rate(byHint.key);
+  const rate = useCallback(async (v: Vocab, rating: "again" | "hard" | "good") => {
+    rated.current.add(v.id);
+    try {
+      const res = await api.post("/api/review", { vocabulary_id: v.id, rating, request_id: newRequestId() });
+      if (typeof res.memory_strength === "number") setMemory((m) => ({ ...m, [v.id]: res.memory_strength }));
+    } catch {
+      rated.current.delete(v.id); // let a later answer this session carry the rating instead
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [awaitingRating, rate]);
+  }, []);
 
-  if (!queue) return null;
+  const award: AwardFn = useCallback((a) => {
+    const t = tallyRef.current;
+    let combo = t.combo;
+    let xp = 0;
+    if (a.correct) {
+      if (!a.keepCombo) combo += 1;
+      xp = a.keepCombo ? a.base : xpWithCombo(a.base, combo);
+    } else {
+      combo = 0; // the only "penalty": the streak of answers restarts, nothing is taken away
+    }
+    const counts = !a.keepCombo;
+    const next: Tally = {
+      xp: t.xp + xp, combo, best: Math.max(t.best, combo),
+      correct: t.correct + (counts && a.correct ? 1 : 0), total: t.total + (counts ? 1 : 0),
+    };
+    tallyRef.current = next;
+    setTally(next);
+    if (xp) setGain({ xp, key: Date.now() });
+    if (a.correct && !a.keepCombo && combo % 5 === 0) setConfetti(makeConfettiPieces(40));
+    // Learn cards (keepCombo) aren't answers, so they don't move the cheerleaders.
+    if (!a.keepCombo) react(!a.correct ? "wrong" : t.combo >= 5 ? "streak" : "correct");
+    if (a.vocab && a.rate !== false && !rated.current.has(a.vocab.id)) {
+      rate(a.vocab, a.correct ? (a.typo ? "hard" : "good") : "again");
+    }
+    return { xp, combo };
+  }, [rate, react]);
 
-  const progressPct = queue.length ? (100 * i) / queue.length : 0;
+  if (!session) return null;
+
+  const { rounds } = session;
+  const round = rounds[idx];
+
+  function next(correct: boolean) {
+    if (!session) return;
+    let updated = session.rounds;
+    if (!correct && round && isQuestion(round) && updated.length < 22) {
+      // A miss comes back a few rounds later as a different question type.
+      const retry = retryFor((round as Extract<Round, { vocab: Vocab }>).vocab, [...session.words, ...session.pool]);
+      if (retry) {
+        const bossAt = updated[updated.length - 1]?.kind === "boss" ? updated.length - 1 : updated.length;
+        updated = [...updated];
+        updated.splice(Math.min(idx + 3, bossAt), 0, retry);
+      }
+    }
+    if (round?.kind === "boss") setBossWon(correct);
+    if (idx + 1 >= updated.length) {
+      setChest(10 + Math.floor(Math.random() * 21) + (round?.kind === "boss" && correct ? 25 : 0));
+      setConfetti(makeConfettiPieces());
+    }
+    setSession({ ...session, rounds: updated });
+    setIdx(idx + 1);
+    react("idle");
+  }
+
+  const current = round && round.kind !== "match" && round.kind !== "battle" && round.kind !== "boss" ? round.vocab : null;
 
   return (
     <>
       <div className="toolbar">
-        <h1 style={{ margin: 0 }}>Study session</h1>
+        <h1 style={{ margin: 0 }}>Vocabulary quest</h1>
         <div className="spacer" />
-        <StudyModeTabs active="anki" />
+        <StudyModeTabs active="game" />
       </div>
+      <Confetti key={confetti ? tally.xp : 0} pieces={confetti} />
 
-      {queue.length === 0 ? (
+      {empty ? (
         <div className="card empty-state">
-          <h2>No cards to study right now</h2>
-          <p>Nothing is due, and you have no new words. Add more vocabulary or check back later.</p>
+          <h2>All caught up 🎉</h2>
+          <p>Nothing is due and there are no new words for today. Add vocabulary or come back later.</p>
           <Link href="/vocabulary/new" className="btn" style={{ marginTop: 10, display: "inline-flex" }}>Add vocabulary</Link>
         </div>
-      ) : !card ? (
-        <div className="card empty-state">
-          <h2>Session complete 🎉</h2>
-          <p>{queue.length} cards reviewed.</p>
-          <Link href="/dashboard" className="btn" style={{ marginTop: 10, display: "inline-flex" }}>Back to dashboard</Link>
-        </div>
+      ) : !round ? (
+        <SessionComplete
+          tally={tally} bossWon={bossWon} chest={chest} words={session.words} memory={memory}
+          requestId={session.requestId} more={session.more} onNext={() => setLoadKey((k) => k + 1)}
+        />
       ) : (
-        <div className="study-wrap">
-          <div className="session-row">
-            <span className="subtitle" style={{ margin: 0 }}>Card {i + 1} of {queue.length}</span>
-            {combo > 1 && <span className="combo-pill">🔥 {combo} in a row</span>}
-          </div>
-          <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${progressPct}%` }} /></div>
-
-          <div className={`flashcard${feedback && !feedback.correct ? " shake" : ""}`} style={{ cursor: "default", position: "relative" }}>
-            <Confetti pieces={confettiPieces} />
-            <span className={`badge ${card.srs_state.toLowerCase()}`} style={{ position: "absolute", top: 18, right: 18 }}>
-              {card.srs_state}
-            </span>
-
-            {!wrongOnce && !settled ? (
-              <>
-                <div className="pos">What&apos;s the English word for...</div>
-                <div className="word" style={{ fontSize: "1.7rem", margin: "6px 0" }}>{card.translation || "—"}</div>
-                {card.definition && <div className="pos">{card.definition}</div>}
-                <input
-                  type="text"
-                  autoComplete="off"
-                  placeholder="Type your answer..."
-                  value={inputValue}
-                  autoFocus
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") check(); }}
-                  style={{ marginTop: 16, textAlign: "center", fontSize: "1.1rem" }}
-                />
-                <button className="btn" style={{ marginTop: 12 }} onClick={check} disabled={!inputValue.trim() || busy}>
-                  Check
-                </button>
-              </>
-            ) : (
-              <>
-                <div
-                  className={`feedback ${feedback?.correct ? "correct" : "wrong"}`}
-                  style={{ fontWeight: 700, fontSize: "1.05rem", color: feedback?.correct ? "var(--success)" : "var(--danger)" }}
-                >
-                  {feedback?.text}
-                </div>
-                <div className="word-row" style={{ marginTop: 8 }}>
-                  <div className="word">{card.word}</div>
-                  <button
-                    type="button"
-                    className="speak-btn"
-                    aria-label="Listen"
-                    onClick={() => speak(card.word)}
-                  >
-                    🔊
-                  </button>
-                </div>
-                {card.pronunciation && (
-                  <div className="pos">{card.pronunciation}{card.part_of_speech && ` · ${card.part_of_speech}`}</div>
-                )}
-                {card.examples.length > 0 && (
-                  <div className="examples">{card.examples.map((e, idx) => <div key={idx}>{e}</div>)}</div>
-                )}
-                {!settled && (
-                  <>
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      placeholder="Type it to continue..."
-                      value={inputValue}
-                      autoFocus
-                      onChange={(e) => setInputValue(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") check(); }}
-                      style={{ marginTop: 16, textAlign: "center", fontSize: "1.1rem", borderColor: "var(--danger)" }}
-                    />
-                    <button className="btn" style={{ marginTop: 12 }} onClick={check} disabled={!inputValue.trim() || busy}>
-                      Check
-                    </button>
-                  </>
-                )}
-              </>
-            )}
-          </div>
-
-          {awaitingRating && (
-            <div style={{ width: "100%", maxWidth: 520 }}>
-              <div className="rating-row">
-                {RATINGS.map((r) => (
-                  <button key={r.key} className={r.cls} onClick={() => rate(r.key)} disabled={busy}>
-                    {r.label}
-                    <span className="rating-interval">{preview ? formatInterval(preview[r.key].interval_days) : "…"}</span>
-                  </button>
-                ))}
+        <Cheer3DLayout mood={mood} left="luna" right="mira">
+          <div className="game-stage">
+            <div className="game-hud">
+              <div className="hud-progress">
+                <span>{round.kind === "boss" ? "Final Boss" : `Round ${idx + 1} of ${rounds.length}`}</span>
+                <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${(100 * idx) / rounds.length}%` }} /></div>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-around", marginTop: 6 }}>
-                {RATINGS.map((r) => (
-                  <span key={r.key} className="subtitle" style={{ margin: 0, fontSize: "0.78rem" }}>
-                    <span className="kbd">{r.hint}</span>
-                  </span>
-                ))}
+              <div className="hud-stat">
+                ⭐ <b>{tally.xp}</b> XP
+                {gain && <span key={gain.key} className="xp-float">+{gain.xp}</span>}
               </div>
+              <div key={tally.combo} className={`combo-pill${tally.combo > 1 ? " live" : ""}`}>🔥 x{Math.max(tally.combo, 1)}</div>
             </div>
-          )}
-        </div>
+            {current && current.srs_state !== "NEW" && <MemoryMeter value={memory[current.id] ?? current.memory_strength} />}
+            <RoundView key={idx} round={round} award={award} onDone={next} />
+          </div>
+        </Cheer3DLayout>
       )}
     </>
   );
 }
 
-export default function AnkiPage() {
-  return <Protected>{() => <AnkiContent />}</Protected>;
+function SessionComplete({ tally, bossWon, chest, words, memory, requestId, more, onNext }: {
+  tally: Tally; bossWon: boolean; chest: number; words: Vocab[]; memory: Record<number, number>;
+  requestId: string; more: boolean; onNext: () => void;
+}) {
+  const [opened, setOpened] = useState(false);
+  const [result, setResult] = useState<{ stats: GameStats; new_achievements: Achievement[] } | null>(null);
+  const [error, setError] = useState("");
+  const sent = useRef(false);
+  const coins = coinsFor(tally.xp) + chest;
+  const accuracy = tally.total ? Math.round((100 * tally.correct) / tally.total) : 0;
+
+  useEffect(() => {
+    if (sent.current) return;
+    sent.current = true;
+    api.post("/api/game/session", {
+      request_id: requestId, xp: tally.xp, coins, best_combo: tally.best,
+      correct: tally.correct, total: tally.total, boss_won: bossWon,
+    }).then((res) => {
+      setResult(res);
+      window.dispatchEvent(new CustomEvent("game-stats", { detail: res.stats }));
+    }).catch((e) => setError(e.message || "Couldn't save your rewards."));
+  }, [requestId, tally, coins, bossWon]);
+
+  const s = result?.stats;
+  return (
+    <div className="game-stage">
+      <div className="game-card complete-card">
+        <div className="round-label">Session complete</div>
+        <h2>{bossWon ? "⚔️ Boss defeated!" : "🏁 Quest finished"}</h2>
+        <p className="subtitle" style={{ margin: 0 }}>
+          {bossWon ? "The Lexicon Dragon is down. Your words are stronger for it." : "The boss got away this time, and every word still got practice."}
+        </p>
+
+        <div className="reward-grid">
+          <div><b>+{tally.xp}</b><span>XP</span></div>
+          <div><b>🪙 {coinsFor(tally.xp) + (opened ? chest : 0)}</b><span>Coins</span></div>
+          <div><b>🔥 x{tally.best}</b><span>Best combo</span></div>
+          <div><b>{accuracy}%</b><span>Accuracy</span></div>
+        </div>
+
+        <button className={`chest${opened ? " open" : ""}`} onClick={() => setOpened(true)} disabled={opened}>
+          <span aria-hidden="true">{opened ? "🪙" : "🎁"}</span>
+          {opened ? `Chest opened: +${chest} bonus coins` : "Open your reward chest"}
+        </button>
+
+        {s && (
+          <div className="level-block">
+            <div className="level-row"><b>Level {s.level}</b><span>{s.xp_into_level} / {s.xp_for_next} XP</span></div>
+            <div className="xp-track"><div style={{ width: `${(100 * s.xp_into_level) / s.xp_for_next}%` }} /></div>
+          </div>
+        )}
+        {error && <p className="error">{error}</p>}
+
+        {result && result.new_achievements.length > 0 && (
+          <div className="new-badges">
+            {result.new_achievements.map((a) => (
+              <div key={a.key} className="badge-card unlocked pop"><span>{a.icon}</span><div><b>{a.title}</b><small>{a.description}</small></div></div>
+            ))}
+          </div>
+        )}
+
+        <h3 className="memory-title">Memory progress</h3>
+        <div className="memory-list">
+          {words.map((w) => {
+            const after = memory[w.id] ?? w.memory_strength;
+            const delta = after - w.memory_strength;
+            return (
+              <div key={w.id} className="memory-item">
+                <span className="memory-word">{w.word}</span>
+                <MemoryMeter value={after} compact />
+                {delta !== 0 && <span className={`delta ${delta > 0 ? "up" : "down"}`}>{delta > 0 ? "+" : ""}{delta}</span>}
+              </div>
+            );
+          })}
+        </div>
+        <p className="subtitle memory-note">The scheduler brings each word back right before you&apos;re likely to forget it.</p>
+
+        <div className="round-actions">
+          <Link href="/dashboard" className="btn secondary">Dashboard</Link>
+          {more ? <button className="btn" onClick={onNext}>Next session</button> : <Link href="/achievements" className="btn">View achievements</Link>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function GamePage() {
+  return <Protected>{() => <GameContent />}</Protected>;
 }

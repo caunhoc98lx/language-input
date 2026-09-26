@@ -12,6 +12,44 @@ export interface User {
   streak: number;
   last_active_date: string | null;
   created_at: string;
+  xp: number;
+  coins: number;
+  level: number;
+  xp_into_level: number;
+  xp_for_next: number;
+}
+
+/** Totals from the game layer - POST /api/game/session, GET /api/game/achievements. */
+export interface GameStats {
+  xp: number;
+  coins: number;
+  streak: number;
+  best_combo: number;
+  boss_wins: number;
+  sessions_completed: number;
+  level: number;
+  xp_into_level: number;
+  xp_for_next: number;
+  words_learned: number;
+  words_mastered: number;
+}
+
+export interface Achievement {
+  key: string;
+  title: string;
+  description: string;
+  icon: string;
+  unlocked: boolean;
+}
+
+/** Another of the learner's words, used only as a wrong option in game rounds. */
+export interface PoolWord {
+  id: number;
+  word: string;
+  translation: string;
+  definition: string;
+  part_of_speech: string;
+  examples: string[];
 }
 
 export type Skill = "listening" | "reading" | "writing" | "speaking";
@@ -66,10 +104,13 @@ export interface Vocab {
   synonyms: string[];
   antonyms: string[];
   collocations: string[];
+  word_family: string[];
   ielts_level: string;
   topic: string;
   memory_tip: string;
   notes: string;
+  /** 0-100, FSRS's estimated chance of recalling it right now. Display only. */
+  memory_strength: number;
   srs_state: "NEW" | "LEARNING" | "REVIEW" | "RELEARNING" | "MASTERED";
   ease: number;
   interval_days: number;

@@ -120,6 +120,21 @@ CREATE TABLE IF NOT EXISTS daily_attempts (
     feedback_json TEXT,
     submitted_at VARCHAR(40)
 );
+
+-- One row per finished game session (the gamified /study/anki screen). The
+-- unique request_id makes crediting XP/coins idempotent, same idea as reviews.
+CREATE TABLE IF NOT EXISTS game_sessions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    request_id VARCHAR(64) NOT NULL UNIQUE,
+    xp INTEGER NOT NULL,
+    coins INTEGER NOT NULL,
+    best_combo INTEGER NOT NULL,
+    correct INTEGER NOT NULL,
+    total INTEGER NOT NULL,
+    boss_won BOOLEAN NOT NULL,
+    completed_at VARCHAR(40)
+);
 """
 
 # Indexes, kept separate from SCHEMA_TABLES: MySQL has no
@@ -306,6 +321,15 @@ ALTER TABLE reviews ADD COLUMN elapsed_days REAL;
 ALTER TABLE users ADD COLUMN timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Ho_Chi_Minh';
 ALTER TABLE users ADD COLUMN new_cards_per_day INTEGER NOT NULL DEFAULT 20;
 ALTER TABLE users ADD COLUMN max_reviews_per_day INTEGER NOT NULL DEFAULT 200;
+
+-- Game layer on top of the scheduler: running totals only. Level is derived
+-- from xp (main.level_info), achievements from these + vocabulary counts.
+ALTER TABLE users ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN best_combo INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN boss_wins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN sessions_completed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE vocabulary ADD COLUMN word_family_json TEXT;
 """
 
 

@@ -102,6 +102,15 @@ def review(row, rating: str, now: datetime | None = None) -> dict:
     }
 
 
+def memory_strength(row, now: datetime | None = None) -> int:
+    """0-100: FSRS's own estimate of the chance the learner recalls this word
+    right now (retrievability). Display-only - scheduling never reads it."""
+    if not row["last_reviewed_at"] or row["stability"] is None:
+        return 0
+    card = _card_from_row(row)
+    return round(100 * _scheduler.get_card_retrievability(card, current_datetime=now or datetime.now(tz.utc)))
+
+
 def preview(row, now: datetime | None = None) -> dict:
     """What each of the 4 ratings would produce, without persisting anything -
     the intervals shown on the rating buttons before the learner picks one."""
@@ -182,6 +191,11 @@ def _run_demo_assertions():
         last_reviewed_at=(now - timedelta(days=8)).isoformat(),
         next_review_at=now.isoformat(),
     )
+
+    assert memory_strength(row) == 0
+    fresh = memory_strength(reviewed, now - timedelta(days=8))
+    later = memory_strength(reviewed, now + timedelta(days=30))
+    assert 0 <= later < fresh <= 100, (fresh, later)
 
     # review card + Again on a REVIEW card increments lapses and demotes the state.
     again = review(reviewed, "again", now)

@@ -44,6 +44,11 @@ or above, or IELTS-relevant) and return those as separate items. Skip trivial wo
 (the, is, a, and, ...).
 - For every item, provide an accurate Vietnamese translation and the rest of the \
 fields below. Keep definitions in English, translations in Vietnamese.
+- "topic" must be exactly one of these IELTS topics: Education, Environment, \
+Technology, Health, Work, Business, Society, Crime, Government, Culture, Travel, \
+Science, Media.
+- "word_family" lists related forms of the word with their part of speech (an \
+empty list if there are none).
 - Do not invent words that are not present or implied in the input.
 - "word" must be the base dictionary form (lemma): singular noun, infinitive verb \
 without "to", positive-degree adjective/adverb - e.g. "boasted" -> "boast", "barrels" \
@@ -65,6 +70,7 @@ Respond ONLY with JSON matching this shape:
       "synonyms": ["plentiful", "ample", "copious"],
       "antonyms": ["scarce", "limited"],
       "collocations": ["abundant resources", "abundant supply"],
+      "word_family": ["abundance (noun)", "abundantly (adverb)"],
       "ielts_level": "B2-C1",
       "topic": "Environment",
       "memory_tip": "short mnemonic or association to remember the word"
@@ -85,12 +91,13 @@ class VocabItem(BaseModel):
     synonyms: list[str] = Field(default_factory=list)
     antonyms: list[str] = Field(default_factory=list)
     collocations: list[str] = Field(default_factory=list)
+    word_family: list[str] = Field(default_factory=list)
     ielts_level: str = ""
     topic: str = ""
     memory_tip: str = ""
 
     _coerce_lists = field_validator(
-        "examples", "synonyms", "antonyms", "collocations", mode="before"
+        "examples", "synonyms", "antonyms", "collocations", "word_family", mode="before"
     )(_as_list)
     _coerce_strs = field_validator(
         "word", "translation", "part_of_speech", "pronunciation", "phonetic",
