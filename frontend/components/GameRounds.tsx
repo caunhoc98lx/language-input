@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { speak } from "@/lib/speech";
-import { baseXp, checkTyped, type Question, type Round } from "@/lib/game";
+import { baseXp, checkTyped, type ChoiceMode, type Question, type Round } from "@/lib/game";
 import type { Vocab } from "@/lib/types";
 
 /** One answer, reported to the session. `rate: false` = practice only, never
@@ -120,32 +120,35 @@ export function LearnRound({ round, award, onDone }: RoundProps<Extract<Round, {
   );
 }
 
-// ---------- 2 / 4 / 7. choice (multiple choice, listening, context) ----------
+// ---------- 2 / 4 / 7. choice (multiple choice, context, collocation, topic) ----------
+
+const LABELS: Partial<Record<ChoiceMode, string>> = {
+  context: "Context challenge",
+  collocation: "Natural phrase",
+  topic: "Where does it fit?",
+  usage: "Use it right",
+};
 
 export function ChoiceRound({ round, award, onDone }: RoundProps<Extract<Question, { kind: "choice" }>>) {
   const v = round.vocab;
   const [picked, setPicked] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
-  const listening = round.mode === "listening";
-
-  useEffect(() => { if (listening) speak(v.word); }, [listening, v.word]);
+  const inContext = round.mode === "context" || round.mode === "collocation";
 
   function pick(opt: string) {
     if (result) return;
     const correct = opt === round.answer;
     setPicked(opt);
     setResult({ correct, award: award({ vocab: v, correct, base: baseXp(round) }) });
-    if (!listening) speak(v.word);
+    speak(v.word);
   }
   useNumberKeys(round.options.length, (i) => pick(round.options[i]), !result);
 
   const long = round.options.some((o) => o.length > 28);
   return (
     <div className="game-card">
-      <div className="round-label">{listening ? "Listening challenge" : round.mode === "context" ? "Context challenge" : "Multiple choice"}</div>
-      {listening ? (
-        <button type="button" className="listen-orb" onClick={() => speak(v.word)} aria-label="Play the word again">🔊<small>Play again</small></button>
-      ) : round.mode === "context" ? (
+      <div className="round-label">{LABELS[round.mode] ?? "Multiple choice"}</div>
+      {inContext ? (
         <>
           {v.topic && <span className="topic-chip">IELTS · {v.topic}</span>}
           <p className="context-sentence">{round.stem}</p>

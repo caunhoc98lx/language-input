@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Protected from "@/components/Protected";
+import VocabularyProgress, { type WordActivity } from "@/components/VocabularyProgress";
 import { api } from "@/lib/api";
 import type { Coaching, QuestionTypeAccuracy, Skill, User } from "@/lib/types";
 
@@ -13,6 +14,7 @@ interface DashboardData extends Coaching {
   mastered: number;
   learning: number;
   total: number;
+  vocabulary_activity: WordActivity;
   sets_progress: { id: number; title: string; total_words: number; pct: number }[];
 }
 
@@ -70,12 +72,17 @@ function TimeRow({ skill, minutes, max }: { skill: Skill; minutes: number; max: 
 
 function DashboardContent({ user }: { user: User }) {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
-    api.get("/api/dashboard").then(setData);
-  }, []);
+    let active = true;
+    api.get("/api/dashboard").then(result => { if (active) setData(result); }).catch(() => { if (active) setError(true); });
+    return () => { active = false; };
+  }, [retry]);
 
-  if (!data) return null;
+  if (error) return <div className="card" role="alert"><h2>Couldn&apos;t load your progress</h2><p className="subtitle">Please try again to see your latest practice.</p><button className="btn" onClick={() => { setError(false); setRetry(value => value + 1); }}>Try again</button></div>;
+  if (!data) return <div className="card" role="status">Loading your progress…</div>;
 
   const { bands, plan, weak_areas, question_type_accuracy, activity } = data;
   const planMinutes = plan.reduce((sum, t) => sum + t.minutes, 0);
@@ -115,6 +122,9 @@ function DashboardContent({ user }: { user: User }) {
         </div>
       </div>
 
+      {data.vocabulary_activity && <VocabularyProgress activity={data.vocabulary_activity} mastered={data.mastered} total={data.total} learning={data.learning} due={data.due} />}
+
+      <h2>Your IELTS journey</h2>
       <div className="card skill-bands" style={{ marginBottom: 24 }}>
         {SKILLS.map((skill) => {
           const band = bands.skills[skill];

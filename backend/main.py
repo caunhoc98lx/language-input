@@ -22,6 +22,7 @@ import coach
 import ielts
 import srs
 from db import db, init_db
+from vocabulary_activity import vocabulary_activity
 
 app = FastAPI(title="Language Input API")
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET", secrets.token_hex(32)))
@@ -296,6 +297,7 @@ def dashboard(request: Request):
             (user["id"],),
         ).fetchall()
         coaching = build_coaching(conn, user)
+        word_activity = vocabulary_activity(conn, user)
     sets_progress = []
     for s in sets:
         pct = round(100 * (s["mastered_words"] or 0) / s["total_words"]) if s["total_words"] else 0
@@ -308,6 +310,7 @@ def dashboard(request: Request):
         "learning": learning,
         "total": total,
         "sets_progress": sets_progress,
+        "vocabulary_activity": word_activity,
         **coaching,
     }
 

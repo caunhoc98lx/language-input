@@ -42,7 +42,7 @@ function DailyContent() {
         {TASKS.map((t) => {
           const state = data.tasks[t.kind];
           return (
-            <div className="card" key={t.kind} style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div className="card daily-task-card" key={t.kind} style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <div style={{ fontSize: "1.8rem" }}>{t.icon}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

@@ -31,10 +31,10 @@ export default function LoginPage() {
         <h1>Welcome back</h1>
         <p className="subtitle">Log in to keep your streak going.</p>
         <form onSubmit={onSubmit}>
-          <label>Email</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-          <label>Password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <label htmlFor="login-email">Email</label>
+          <input id="login-email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+          <label htmlFor="login-password">Password</label>
+          <input id="login-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           {error && <div className="error">{error}</div>}
           <button className="btn" style={{ width: "100%", marginTop: 20 }} disabled={busy}>
             {busy ? "Logging in..." : "Log in"}

@@ -14,7 +14,7 @@ export const IELTS_TOPICS = [
   "Crime", "Government", "Culture", "Travel", "Science", "Media",
 ] as const;
 
-export type ChoiceMode = "translation" | "meaning" | "usage" | "synonym" | "antonym" | "listening" | "context";
+export type ChoiceMode = "translation" | "meaning" | "usage" | "synonym" | "antonym" | "context" | "collocation" | "topic";
 
 /** A single-word question - these are the rounds that can rate a word. */
 export type Question =
@@ -40,7 +40,7 @@ export function baseXp(round: Round): number {
     case "match": return 30;
     case "battle": return 25;
     case "boss": return 25;
-    case "choice": return round.mode === "listening" ? 20 : round.mode === "context" ? 25 : 15;
+    case "choice": return round.mode === "context" || round.mode === "collocation" ? 25 : round.mode === "topic" ? 20 : 15;
   }
 }
 
@@ -137,8 +137,13 @@ export function makeQuestion(v: Vocab, type: QuestionType, others: PoolWord[]): 
       return v.synonyms[0] ? choice("synonym", `Which word is closest in meaning to “${v.word}”?`, v.synonyms[0], others.map((o) => o.word).filter((w) => !v.synonyms.includes(w))) : null;
     case "antonym":
       return v.antonyms[0] ? choice("antonym", `Which word is the opposite of “${v.word}”?`, v.antonyms[0], others.map((o) => o.word).filter((w) => !v.antonyms.includes(w))) : null;
-    case "listening":
-      return choice("listening", "Listen and choose the word you hear", v.word, others.map((o) => o.word));
+    case "collocation": {
+      // The word inside one of its own natural phrases, e.g. "make a _____".
+      const phrase = v.collocations.find((c) => wordRe(v.word).test(c));
+      return phrase ? choice("collocation", "Which word completes this natural phrase?", v.word, others.map((o) => o.word), blankOut(phrase, v.word)) : null;
+    }
+    case "topic":
+      return v.topic ? choice("topic", `In which IELTS topic would you most naturally use “${v.word}”?`, v.topic, [...IELTS_TOPICS]) : null;
     case "context":
       return sentence ? choice("context", "Complete the sentence", v.word, others.map((o) => o.word), blankOut(sentence, v.word)) : null;
     case "usage": {
@@ -177,9 +182,9 @@ function typeBag(types: QuestionType[]) {
   };
 }
 
-const GRADED_TYPES: QuestionType[] = ["translation", "meaning", "type", "listening", "context", "sentence", "type", "synonym", "usage"];
-const QUICK_TYPES: QuestionType[] = ["translation", "meaning", "context", "listening", "synonym", "antonym"];
-const BOSS_TYPES: QuestionType[] = ["type", "context", "listening", "meaning", "sentence", "translation", "usage"];
+const GRADED_TYPES: QuestionType[] = ["translation", "meaning", "type", "collocation", "context", "sentence", "type", "synonym", "usage", "topic"];
+const QUICK_TYPES: QuestionType[] = ["translation", "meaning", "context", "collocation", "topic", "synonym", "antonym"];
+const BOSS_TYPES: QuestionType[] = ["type", "context", "collocation", "meaning", "sentence", "translation", "usage"];
 
 /** Pick this session's words from the front of the scheduler queue (the
  * queue is already in priority order). New words cost two rounds (learn +

@@ -49,6 +49,8 @@ for (let run = 0; run < 200; run++) {
     assert.equal(r.options.length, 4);
     assert.equal(new Set(r.options).size, 4);
     assert.equal(r.options.filter((o) => o === r.answer).length, 1);
+    assert.notEqual(r.mode, "listening" as never);
+    if (r.mode === "collocation") assert.ok(r.stem?.includes("_____") && !r.stem.includes(r.vocab.word));
   }
 }
 console.log("game self-check OK");
