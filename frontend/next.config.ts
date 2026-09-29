@@ -1,9 +1,13 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
-  /* config options here */
   output: 'standalone',
-  images: { qualities: [75, 90] }, // 90 for the cheerleader portraits
+  images: { qualities: [75, 90] },
+  webpack: (config) => {
+    config.resolve.alias["@"] = path.resolve(process.cwd()); // hoặc "src" nếu dùng src/
+    return config;
+  },
 };
 
 export default nextConfig;
